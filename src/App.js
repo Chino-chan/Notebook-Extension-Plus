@@ -17,17 +17,45 @@ import { importFromUrl } from './util.js';
  * @typedef {'character' | 'global'} NotesMode
  */
 
+/**
+ * @typedef {'card' | 'chat'} CharacterNotesScope
+ */
+
 const dragElement = await importFromUrl('/scripts/RossAscends-mods.js', 'dragElement', () => { });
 const NOTEBOOK_PLUS_PAGES_PATH = ['extensionSettings', 'notebookPlus', 'pages'];
 const NOTEBOOK_PLUS_CHARACTER_PAGES_PATH = ['extensionSettings', 'notebookPlus', 'characterPages'];
 const LEGACY_NOTEBOOK_PAGES_PATH = 'extensionSettings.notebook.pages';
+const CHARACTER_PAGES_GENERAL_KEY = '__generalPages';
+const CHARACTER_PAGES_CHATS_KEY = '__chatPages';
 const NOTES_MODE = {
     CHARACTER: 'character',
     GLOBAL: 'global',
 };
+const CHARACTER_NOTES_SCOPE = {
+    CARD: 'card',
+    CHAT: 'chat',
+};
 
 function clampSelectedIndex(index, pageCount) {
     return pageCount <= 0 ? 0 : Math.min(index, pageCount - 1);
+}
+
+function getPagesForScope(notesMode, characterNotesScope, contextInfo, selectedCharacterChatId) {
+    return notesMode === NOTES_MODE.CHARACTER
+        ? StateManager.getCharacterPages(contextInfo.characterKey, characterNotesScope, selectedCharacterChatId)
+        : StateManager.getGlobalPages();
+}
+
+function getActiveScopeKey(notesMode, characterNotesScope, contextInfo, selectedCharacterChatId) {
+    if (notesMode === NOTES_MODE.GLOBAL) {
+        return NOTES_MODE.GLOBAL;
+    }
+
+    if (characterNotesScope === CHARACTER_NOTES_SCOPE.CARD) {
+        return `${NOTES_MODE.CHARACTER}:${CHARACTER_NOTES_SCOPE.CARD}:${contextInfo.characterKey}`;
+    }
+
+    return `${NOTES_MODE.CHARACTER}:${CHARACTER_NOTES_SCOPE.CHAT}:${contextInfo.characterKey}:${selectedCharacterChatId}`;
 }
 
 function getNotebookContextSnapshot() {
@@ -93,9 +121,52 @@ async function fetchCharacterChats(characterKey, currentChatId) {
     }
 }
 
-function getCharacterDropdownPlaceholder(notesMode, characterName) {
+function normalizeCharacterPagesBucket(bucket) {
+    if (!_.isPlainObject(bucket)) {
+        return {
+            [CHARACTER_PAGES_GENERAL_KEY]: [],
+            [CHARACTER_PAGES_CHATS_KEY]: {},
+        };
+    }
+
+    if (Array.isArray(bucket[CHARACTER_PAGES_GENERAL_KEY]) || _.isPlainObject(bucket[CHARACTER_PAGES_CHATS_KEY])) {
+        const chatPages = _.isPlainObject(bucket[CHARACTER_PAGES_CHATS_KEY])
+            ? Object.entries(bucket[CHARACTER_PAGES_CHATS_KEY]).reduce((pagesByChat, [chatId, pages]) => {
+                if (Array.isArray(pages)) {
+                    pagesByChat[chatId] = pages;
+                }
+
+                return pagesByChat;
+            }, {})
+            : {};
+
+        return {
+            [CHARACTER_PAGES_GENERAL_KEY]: Array.isArray(bucket[CHARACTER_PAGES_GENERAL_KEY]) ? bucket[CHARACTER_PAGES_GENERAL_KEY] : [],
+            [CHARACTER_PAGES_CHATS_KEY]: chatPages,
+        };
+    }
+
+    const legacyChatPages = Object.entries(bucket).reduce((pagesByChat, [chatId, pages]) => {
+        if (Array.isArray(pages)) {
+            pagesByChat[chatId] = pages;
+        }
+
+        return pagesByChat;
+    }, {});
+
+    return {
+        [CHARACTER_PAGES_GENERAL_KEY]: [],
+        [CHARACTER_PAGES_CHATS_KEY]: legacyChatPages,
+    };
+}
+
+function getCharacterDropdownPlaceholder(notesMode, characterNotesScope, characterName) {
     if (notesMode === NOTES_MODE.GLOBAL) {
         return 'Character notes disabled in Global mode';
+    }
+
+    if (characterNotesScope === CHARACTER_NOTES_SCOPE.CARD) {
+        return 'Specific chat selector disabled for card-wide notes';
     }
 
     if (characterName) {
@@ -105,15 +176,21 @@ function getCharacterDropdownPlaceholder(notesMode, characterName) {
     return 'Open a character chat to use Character Notes';
 }
 
-function getEmptyStateMessage(notesMode, contextInfo, selectedCharacterChatId) {
+function getEmptyStateMessage(notesMode, characterNotesScope, contextInfo, selectedCharacterChatId) {
     if (notesMode === NOTES_MODE.CHARACTER) {
         if (!contextInfo.characterKey) {
             return 'Open a character chat to use Character Notes.';
         }
 
+        if (characterNotesScope === CHARACTER_NOTES_SCOPE.CARD) {
+            return 'Click the + button to add a note for this character card.';
+        }
+
         if (!selectedCharacterChatId) {
             return 'No chat files are available for this character card.';
         }
+
+        return 'Click the + button to add a note for this chat.';
     }
 
     return 'Click the + button to add a note.';
@@ -160,32 +237,49 @@ class StateManager {
     /**
      * Get the list of character pages in Notebook-Plus from extension settings.
      * @param {string} characterKey Character avatar key
+     * @param {CharacterNotesScope} characterNotesScope Character note scope
      * @param {string} chatId Chat file name without extension
      * @returns {Page[]} List of pages
      */
-    static getCharacterPages(characterKey, chatId) {
-        if (!characterKey || !chatId) {
+    static getCharacterPages(characterKey, characterNotesScope, chatId = '') {
+        if (!characterKey) {
             return [];
         }
 
         const context = SillyTavern.getContext();
-        const pages = _.get(context, [...NOTEBOOK_PLUS_CHARACTER_PAGES_PATH, characterKey, chatId]);
-        return Array.isArray(pages) ? pages : [];
+        const bucket = normalizeCharacterPagesBucket(_.get(context, [...NOTEBOOK_PLUS_CHARACTER_PAGES_PATH, characterKey]));
+
+        if (characterNotesScope === CHARACTER_NOTES_SCOPE.CARD) {
+            return bucket[CHARACTER_PAGES_GENERAL_KEY];
+        }
+
+        return Array.isArray(bucket[CHARACTER_PAGES_CHATS_KEY][chatId]) ? bucket[CHARACTER_PAGES_CHATS_KEY][chatId] : [];
     }
 
     /**
      * Set the list of character pages in Notebook-Plus to extension settings.
      * @param {string} characterKey Character avatar key
+     * @param {CharacterNotesScope} characterNotesScope Character note scope
      * @param {string} chatId Chat file name without extension
      * @param {Page[]} pages List of pages to set
      */
-    static setCharacterPages(characterKey, chatId, pages) {
-        if (!characterKey || !chatId) {
+    static setCharacterPages(characterKey, characterNotesScope, chatId, pages) {
+        if (!characterKey) {
             return;
         }
 
         const context = SillyTavern.getContext();
-        _.set(context, [...NOTEBOOK_PLUS_CHARACTER_PAGES_PATH, characterKey, chatId], pages);
+        const bucket = normalizeCharacterPagesBucket(_.get(context, [...NOTEBOOK_PLUS_CHARACTER_PAGES_PATH, characterKey]));
+
+        if (characterNotesScope === CHARACTER_NOTES_SCOPE.CARD) {
+            bucket[CHARACTER_PAGES_GENERAL_KEY] = pages;
+        } else if (chatId) {
+            bucket[CHARACTER_PAGES_CHATS_KEY][chatId] = pages;
+        } else {
+            return;
+        }
+
+        _.set(context, [...NOTEBOOK_PLUS_CHARACTER_PAGES_PATH, characterKey], bucket);
         context.saveSettingsDebounced();
     }
 
@@ -200,16 +294,21 @@ class StateManager {
         }
 
         const context = SillyTavern.getContext();
-        const previousPages = _.get(context, [...NOTEBOOK_PLUS_CHARACTER_PAGES_PATH, oldCharacterKey]);
+        const previousPages = normalizeCharacterPagesBucket(_.get(context, [...NOTEBOOK_PLUS_CHARACTER_PAGES_PATH, oldCharacterKey]));
 
-        if (!_.isPlainObject(previousPages)) {
+        if (previousPages[CHARACTER_PAGES_GENERAL_KEY].length === 0 && Object.keys(previousPages[CHARACTER_PAGES_CHATS_KEY]).length === 0) {
             return;
         }
 
-        const currentPages = _.get(context, [...NOTEBOOK_PLUS_CHARACTER_PAGES_PATH, newCharacterKey]);
+        const currentPages = normalizeCharacterPagesBucket(_.get(context, [...NOTEBOOK_PLUS_CHARACTER_PAGES_PATH, newCharacterKey]));
         const mergedPages = {
-            ..._.cloneDeep(previousPages),
-            ...(_.isPlainObject(currentPages) ? _.cloneDeep(currentPages) : {}),
+            [CHARACTER_PAGES_GENERAL_KEY]: currentPages[CHARACTER_PAGES_GENERAL_KEY].length > 0
+                ? currentPages[CHARACTER_PAGES_GENERAL_KEY]
+                : previousPages[CHARACTER_PAGES_GENERAL_KEY],
+            [CHARACTER_PAGES_CHATS_KEY]: {
+                ...previousPages[CHARACTER_PAGES_CHATS_KEY],
+                ...currentPages[CHARACTER_PAGES_CHATS_KEY],
+            },
         };
 
         _.set(context, [...NOTEBOOK_PLUS_CHARACTER_PAGES_PATH, newCharacterKey], mergedPages);
@@ -222,6 +321,7 @@ function App({ onCloseClicked }) {
     const [pages, setPages] = useState(StateManager.getGlobalPages());
     const [selectedIndex, setSelectedIndex] = useState(0);
     const [notesMode, setNotesMode] = useState(NOTES_MODE.GLOBAL);
+    const [characterNotesScope, setCharacterNotesScope] = useState(CHARACTER_NOTES_SCOPE.CHAT);
     const [contextInfo, setContextInfo] = useState(() => getNotebookContextSnapshot());
     const [characterChats, setCharacterChats] = useState([]);
     const [selectedCharacterChatId, setSelectedCharacterChatId] = useState(() => getNotebookContextSnapshot().currentChatId);
@@ -304,21 +404,29 @@ function App({ onCloseClicked }) {
     }, []);
 
     useEffect(() => {
-        const nextPages = notesMode === NOTES_MODE.CHARACTER
-            ? StateManager.getCharacterPages(contextInfo.characterKey, selectedCharacterChatId)
-            : StateManager.getGlobalPages();
+        const nextPages = getPagesForScope(notesMode, characterNotesScope, contextInfo, selectedCharacterChatId);
 
         setPages(nextPages);
         setSelectedIndex((index) => clampSelectedIndex(index, nextPages.length));
-    }, [notesMode, contextInfo.characterKey, selectedCharacterChatId]);
+    }, [notesMode, characterNotesScope, contextInfo.characterKey, selectedCharacterChatId]);
 
     function persistPages(nextPages) {
         if (notesMode === NOTES_MODE.CHARACTER) {
-            StateManager.setCharacterPages(contextInfo.characterKey, selectedCharacterChatId, nextPages);
+            StateManager.setCharacterPages(contextInfo.characterKey, characterNotesScope, selectedCharacterChatId, nextPages);
             return;
         }
 
         StateManager.setGlobalPages(nextPages);
+    }
+
+    function switchToScope(nextNotesMode, nextCharacterNotesScope = characterNotesScope, nextSelectedCharacterChatId = selectedCharacterChatId) {
+        const nextPages = getPagesForScope(nextNotesMode, nextCharacterNotesScope, contextInfo, nextSelectedCharacterChatId);
+
+        setNotesMode(nextNotesMode);
+        setCharacterNotesScope(nextCharacterNotesScope);
+        setSelectedCharacterChatId(nextSelectedCharacterChatId);
+        setPages(nextPages);
+        setSelectedIndex((index) => clampSelectedIndex(index, nextPages.length));
     }
 
     function handleChange(index, page) {
@@ -360,13 +468,15 @@ function App({ onCloseClicked }) {
         return title && title.length > 10 ? `${title.slice(0, 10)}...` : title;
     }
 
-    const characterDropdownDisabled = notesMode !== NOTES_MODE.CHARACTER || characterChats.length === 0;
-    const canEditCurrentScope = notesMode === NOTES_MODE.GLOBAL || Boolean(contextInfo.characterKey && selectedCharacterChatId);
-    const selectedDropdownValue = notesMode === NOTES_MODE.CHARACTER && characterChats.some((chat) => chat.id === selectedCharacterChatId)
+    const characterDropdownDisabled = notesMode !== NOTES_MODE.CHARACTER || characterNotesScope === CHARACTER_NOTES_SCOPE.CARD || characterChats.length === 0;
+    const canEditCurrentScope = notesMode === NOTES_MODE.GLOBAL
+        || Boolean(contextInfo.characterKey && (characterNotesScope === CHARACTER_NOTES_SCOPE.CARD || selectedCharacterChatId));
+    const selectedDropdownValue = !characterDropdownDisabled && characterChats.some((chat) => chat.id === selectedCharacterChatId)
         ? selectedCharacterChatId
         : '';
-    const emptyStateMessage = getEmptyStateMessage(notesMode, contextInfo, selectedCharacterChatId);
-    const characterDropdownPlaceholder = getCharacterDropdownPlaceholder(notesMode, contextInfo.characterName);
+    const activeScopeKey = getActiveScopeKey(notesMode, characterNotesScope, contextInfo, selectedCharacterChatId);
+    const emptyStateMessage = getEmptyStateMessage(notesMode, characterNotesScope, contextInfo, selectedCharacterChatId);
+    const characterDropdownPlaceholder = getCharacterDropdownPlaceholder(notesMode, characterNotesScope, contextInfo.characterName);
 
     return (
         <>
@@ -382,45 +492,61 @@ function App({ onCloseClicked }) {
                     <div className="notebookPlusScopeToggle" role="tablist" aria-label="Notebook scope">
                         <button
                             type="button"
-                            className={`notebookPlusScopeButton ${notesMode === NOTES_MODE.CHARACTER ? 'is-active' : ''}`}
-                            onClick={() => setNotesMode(NOTES_MODE.CHARACTER)}
+                            className={`notebookPlusScopeButton notebookPlusScopeButton--character ${notesMode === NOTES_MODE.CHARACTER ? 'is-active' : ''}`}
+                            onClick={() => switchToScope(NOTES_MODE.CHARACTER)}
                         >
                             Character Notes
                         </button>
                         <button
                             type="button"
-                            className={`notebookPlusScopeButton ${notesMode === NOTES_MODE.GLOBAL ? 'is-active' : ''}`}
-                            onClick={() => setNotesMode(NOTES_MODE.GLOBAL)}
+                            className={`notebookPlusScopeButton notebookPlusScopeButton--global ${notesMode === NOTES_MODE.GLOBAL ? 'is-active' : ''}`}
+                            onClick={() => switchToScope(NOTES_MODE.GLOBAL)}
                         >
                             Global
                         </button>
                     </div>
-                    <select
-                        className="text_pole notebookPlusChatSelect"
-                        value={selectedDropdownValue}
-                        onChange={(event) => setSelectedCharacterChatId(event.target.value)}
-                        disabled={characterDropdownDisabled}
-                    >
-                        {characterDropdownDisabled ? (
-                            <option value="">{characterDropdownPlaceholder}</option>
-                        ) : (
-                            characterChats.map((chat) => (
-                                <option key={chat.id} value={chat.id}>{chat.title}</option>
-                            ))
-                        )}
-                    </select>
+                    {notesMode === NOTES_MODE.CHARACTER && (
+                        <div className="notebookPlusScopeField">
+                            <div className="notebookPlusScopeLabel">Character note scope</div>
+                            <select
+                                className="text_pole notebookPlusChatSelect"
+                                value={characterNotesScope}
+                                onChange={(event) => switchToScope(NOTES_MODE.CHARACTER, event.target.value, selectedCharacterChatId)}
+                            >
+                                <option value={CHARACTER_NOTES_SCOPE.CARD}>In general for this card</option>
+                                <option value={CHARACTER_NOTES_SCOPE.CHAT}>Specific chat on this card</option>
+                            </select>
+                        </div>
+                    )}
+                    <div className="notebookPlusScopeField">
+                        <div className="notebookPlusScopeLabel">Chat file</div>
+                        <select
+                            className="text_pole notebookPlusChatSelect"
+                            value={selectedDropdownValue}
+                            onChange={(event) => switchToScope(NOTES_MODE.CHARACTER, characterNotesScope, event.target.value)}
+                            disabled={characterDropdownDisabled}
+                        >
+                            {characterDropdownDisabled ? (
+                                <option value="">{characterDropdownPlaceholder}</option>
+                            ) : (
+                                characterChats.map((chat) => (
+                                    <option key={chat.id} value={chat.id}>{chat.title}</option>
+                                ))
+                            )}
+                        </select>
+                    </div>
                 </div>
-                <Tabs selectedIndex={selectedIndex} onSelect={handleTabSelect}>
+                <Tabs key={activeScopeKey} selectedIndex={selectedIndex} onSelect={handleTabSelect}>
                     <TabList>
                         {pages.map((page, index) => (
-                            <Tab key={index}>{sliceTitle(page.title) || '[No name]'}</Tab>
+                            <Tab key={`${activeScopeKey}:${index}`}>{sliceTitle(page.title) || '[No name]'}</Tab>
                         ))}
                         <Tab title="Add a note" disabled={!canEditCurrentScope}>
                             <i className="fa-solid fa-plus"></i>
                         </Tab>
                     </TabList>
                     {pages.map((page, index) => (
-                        <TabPanel key={index}>
+                        <TabPanel key={`${activeScopeKey}:panel:${index}`}>
                             <Page page={page} onChange={(newPage) => handleChange(index, newPage)} />
                         </TabPanel>
                     ))}
