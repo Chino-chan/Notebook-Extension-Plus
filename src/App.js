@@ -14,27 +14,44 @@ import { importFromUrl } from './util.js';
  */
 
 const dragElement = await importFromUrl('/scripts/RossAscends-mods.js', 'dragElement', () => { });
+const NOTEBOOK_PLUS_PAGES_PATH = 'extensionSettings.notebookPlus.pages';
+const LEGACY_NOTEBOOK_PAGES_PATH = 'extensionSettings.notebook.pages';
 
 /**
- * Persistent state manager for the notebook.
+ * Persistent state manager for Notebook-Plus.
  */
 class StateManager {
     /**
-     * Get the list of pages in the notebook from extension settings.
+     * Get the list of pages in Notebook-Plus from extension settings.
      * @returns {Page[]} List of pages
      */
     static getPages() {
         const context = SillyTavern.getContext();
-        return _.get(context, 'extensionSettings.notebook.pages', []);
+        const pages = _.get(context, NOTEBOOK_PLUS_PAGES_PATH);
+
+        if (Array.isArray(pages)) {
+            return pages;
+        }
+
+        const legacyPages = _.get(context, LEGACY_NOTEBOOK_PAGES_PATH);
+
+        if (Array.isArray(legacyPages) && legacyPages.length > 0) {
+            const migratedPages = _.cloneDeep(legacyPages);
+            _.set(context, NOTEBOOK_PLUS_PAGES_PATH, migratedPages);
+            context.saveSettingsDebounced();
+            return migratedPages;
+        }
+
+        return [];
     }
 
     /**
-     * Set the list of pages in the notebook to extension settings.
+     * Set the list of pages in Notebook-Plus to extension settings.
      * @param {Page[]} pages List of pages to set
      */
     static setPages(pages) {
         const context = SillyTavern.getContext();
-        _.set(context, 'extensionSettings.notebook.pages', pages);
+        _.set(context, NOTEBOOK_PLUS_PAGES_PATH, pages);
         context.saveSettingsDebounced();
     }
 }
@@ -44,7 +61,7 @@ function App({ onCloseClicked }) {
     const [selectedIndex, setSelectedIndex] = useState(0);
 
     useEffect(() => {
-        dragElement(jQuery(document.getElementById('notebookPanel')));
+        dragElement(jQuery(document.getElementById('notebookPlusPanel')));
     }, []);
 
     function handleChange(index, page) {
@@ -71,19 +88,19 @@ function App({ onCloseClicked }) {
     }
 
     function sliceTitle(title) {
-        return title && title.length > 10 ? title.slice(0, 10) + '…' : title;
+        return title && title.length > 10 ? `${title.slice(0, 10)}...` : title;
     }
 
     return (
         <>
             <div className="panelControlBar flex-container alignItemsBaseline">
-                <div id="notebookPanelheader" className="fa-fw fa-solid fa-grip drag-grabber"></div>
-                <div id="notebookPanelMaximize" className="inline-drawer-maximize">
+                <div id="notebookPlusPanelheader" className="fa-fw fa-solid fa-grip drag-grabber"></div>
+                <div id="notebookPlusPanelMaximize" className="inline-drawer-maximize">
                     <i className="floating_panel_maximize fa-fw fa-solid fa-window-maximize"></i>
                 </div>
-                <div id="notebookPanelClose" className="fa-fw fa-solid fa-circle-xmark floating_panel_close" onClick={() => onCloseClicked()}></div>
+                <div id="notebookPlusPanelClose" className="fa-fw fa-solid fa-circle-xmark floating_panel_close" onClick={() => onCloseClicked()}></div>
             </div>
-            <div id="notebookPanelHolder" name="notebookPanelHolder" className="scrollY">
+            <div id="notebookPlusPanelHolder" name="notebookPlusPanelHolder" className="scrollY">
                 <Tabs selectedIndex={selectedIndex} onSelect={(index) => setSelectedIndex(index)}>
                     <TabList>
                         {pages.map((page, index) => (

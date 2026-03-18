@@ -1,5 +1,5 @@
 {
-    "display_name": "Notebook",
+    "display_name": "Notebook-Plus",
     "loading_order": 100,
     "requires": [],
     "optional": [],
@@ -7,6 +7,6 @@
     "css": "",
     "author": "Cohee1207",
     "version": "1.0.0",
-    "homePage": "https://github.com/SillyTavern/Extension-Notebook",
+    "homePage": "https://github.com/Chino-chan/Notebook-Extension-Plus",
     "auto_update": true
 }

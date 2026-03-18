@@ -8,13 +8,13 @@ import { importFromUrl } from './util.js';
 const { registerSlashCommand } = SillyTavern.getContext();
 
 // Choose the root container for the extension's main UI
-const buttonContainer = document.getElementById('notebook_wand_container') ?? document.getElementById('extensionsMenu');
+const buttonContainer = document.getElementById('notebook_plus_wand_container') ?? document.getElementById('extensionsMenu');
 const buttonElement = document.createElement('div');
 const iconElement = document.createElement('i');
 const textElement = document.createElement('span');
-textElement.textContent = 'Open Notebook';
+textElement.textContent = 'Open Notebook-Plus';
 iconElement.classList.add('fa-solid', 'fa-clipboard');
-buttonElement.id = 'openNotebookButton';
+buttonElement.id = 'openNotebookPlusButton';
 buttonElement.classList.add('list-group-item', 'flex-container', 'flexGap5', 'interactable');
 buttonElement.tabIndex = 0;
 buttonContainer.classList.add('interactable');
@@ -25,7 +25,7 @@ buttonElement.appendChild(textElement);
 const rootElement = document.getElementById('movingDivs');
 const rootContainer = document.createElement('div');
 rootElement.appendChild(rootContainer);
-rootContainer.id = 'notebookPanel';
+rootContainer.id = 'notebookPlusPanel';
 rootContainer.classList.add('drawer-content', 'flexGap5');
 
 async function getAnimationSettings() {
@@ -34,7 +34,7 @@ async function getAnimationSettings() {
     return { animation_duration, animation_easing };
 }
 
-async function animateNotebookPanel(alreadyVisible) {
+async function animateNotebookPlusPanel(alreadyVisible) {
     const { animation_duration, animation_easing } = await getAnimationSettings();
 
     const keyframes = [
@@ -59,11 +59,11 @@ async function animateNotebookPanel(alreadyVisible) {
 
 buttonElement.addEventListener('click', async () => {
     const alreadyVisible = rootContainer.classList.contains('flex');
-    await animateNotebookPanel(alreadyVisible);
+    await animateNotebookPlusPanel(alreadyVisible);
 });
 
 async function closePanel() {
-    await animateNotebookPanel(true);
+    await animateNotebookPlusPanel(true);
 }
 
 const root = ReactDOM.createRoot(rootContainer);
@@ -74,9 +74,9 @@ root.render(
 );
 
 try {
-    registerSlashCommand('notebook', () => buttonElement.click(), ['nb'], 'Toggle the notebook display.');
+    registerSlashCommand('notebookplus', () => buttonElement.click(), ['nbp'], 'Toggle the Notebook-Plus display.');
 } catch (err) {
-    console.error('Failed to register notebook command', err);
+    console.error('Failed to register notebook-plus command', err);
 }
 
 // intercepts clipboard plaintext to remove duplicate newlines caused by usage of <p> for each line

@@ -1,4 +1,4 @@
-#notebookPanel {
+#notebookPlusPanel {
     display: none;
     overflow-y: auto;
     max-width: 90svw;
@@ -20,68 +20,68 @@
     opacity: 0;
 }
 
-#notebookPanel.flex {
+#notebookPlusPanel.flex {
     display: flex;
     opacity: 1;
 }
 
-#notebookPanel .react-tabs__tab {
+#notebookPlusPanel .react-tabs__tab {
     border-radius: 6px;
     transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
-#notebookPanel .react-tabs__tab--selected {
+#notebookPlusPanel .react-tabs__tab--selected {
     background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 70%, var(--black30a));
     border-color: color-mix(in srgb, var(--SmartThemeBorderColor) 70%, var(--black50a));
     color: var(--SmartThemeBodyColor);
 }
 
-#notebookPanel .ql-toolbar.ql-snow .ql-formats {
+#notebookPlusPanel .ql-toolbar.ql-snow .ql-formats {
     margin-right: 5px;
 }
 
-#notebookPanel .react-tabs__tab:focus:after {
+#notebookPlusPanel .react-tabs__tab:focus:after {
     display: none;
 }
 
-#notebookPanel .react-tabs__tab-list {
+#notebookPlusPanel .react-tabs__tab-list {
     margin: 10px 0 10px;
 }
 
-#notebookPanel .react-tabs__tab:hover {
+#notebookPlusPanel .react-tabs__tab:hover {
     filter: brightness(1.2) contrast(0.6);
 }
 
-#notebookPanel .ql-toolbar.ql-snow,
-#notebookPanel .ql-container.ql-snow {
+#notebookPlusPanel .ql-toolbar.ql-snow,
+#notebookPlusPanel .ql-container.ql-snow {
     border: none;
     font-family: inherit;
     padding: 0;
 }
 
-#notebookPanel .ql-editor {
+#notebookPlusPanel .ql-editor {
     line-height: normal;
     padding: 10px;
     min-height: 15em;
 }
 
-#notebookPanel .ql-editor.ql-blank::before {
+#notebookPlusPanel .ql-editor.ql-blank::before {
     color: unset;
     font-family: inherit;
     opacity: 0.6;
 }
 
-#notebookPanel .ql-snow .ql-picker,
-#notebookPanel .ql-snow .ql-picker.ql-expanded .ql-picker-label {
+#notebookPlusPanel .ql-snow .ql-picker,
+#notebookPlusPanel .ql-snow .ql-picker.ql-expanded .ql-picker-label {
     color: var(--SmartThemeBodyColor);
 }
 
-#notebookPanel .ql-toolbar.ql-snow .ql-picker.ql-expanded .ql-picker-label {
+#notebookPlusPanel .ql-toolbar.ql-snow .ql-picker.ql-expanded .ql-picker-label {
     border-color: transparent;
 }
 
-#notebookPanel .ql-toolbar.ql-snow .ql-picker.ql-expanded .ql-picker-options,
-#notebookPanel .ql-snow .ql-tooltip {
+#notebookPlusPanel .ql-toolbar.ql-snow .ql-picker.ql-expanded .ql-picker-options,
+#notebookPlusPanel .ql-snow .ql-tooltip {
     border-color: var(--SmartThemeBorderColor);
     color: var(--SmartThemeBodyColor);
     background-color: var(--SmartThemeBlurTintColor);
@@ -89,15 +89,15 @@
     box-shadow: none;
 }
 
-#notebookPanel .ql-snow .ql-tooltip {
+#notebookPlusPanel .ql-snow .ql-tooltip {
     left: 0 !important;
 }
 
-#notebookPanel .ql-snow a {
+#notebookPlusPanel .ql-snow a {
     color: var(--SmartThemeQuoteColor);
 }
 
-#notebookPanel .ql-snow .ql-tooltip input[type=text] {
+#notebookPlusPanel .ql-snow .ql-tooltip input[type=text] {
     background-color: var(--black30a);
     color: var(--SmartThemeBodyColor);
     border: 1px solid var(--SmartThemeBorderColor);
@@ -105,66 +105,66 @@
     font-size: calc(var(--mainFontSize) * 0.9);
 }
 
-#notebookPanel .ql-snow.ql-toolbar button:hover,
-#notebookPanel .ql-snow .ql-toolbar button:hover,
-#notebookPanel .ql-snow.ql-toolbar button:focus,
-#notebookPanel .ql-snow .ql-toolbar button:focus,
-#notebookPanel .ql-snow.ql-toolbar button.ql-active,
-#notebookPanel .ql-snow .ql-toolbar button.ql-active,
-#notebookPanel .ql-snow.ql-toolbar .ql-picker-label:hover,
-#notebookPanel .ql-snow .ql-toolbar .ql-picker-label:hover,
-#notebookPanel .ql-snow.ql-toolbar .ql-picker-label.ql-active,
-#notebookPanel .ql-snow .ql-toolbar .ql-picker-label.ql-active,
-#notebookPanel .ql-snow.ql-toolbar .ql-picker-item:hover,
-#notebookPanel .ql-snow .ql-toolbar .ql-picker-item:hover,
-#notebookPanel .ql-snow.ql-toolbar .ql-picker-item.ql-selected,
-#notebookPanel .ql-snow .ql-toolbar .ql-picker-item.ql-selected,
-#notebookPanel .ql-snow.ql-toolbar button:hover .ql-stroke,
-#notebookPanel .ql-snow .ql-toolbar button:hover .ql-stroke,
-#notebookPanel .ql-snow.ql-toolbar button:focus .ql-stroke,
-#notebookPanel .ql-snow .ql-toolbar button:focus .ql-stroke,
-#notebookPanel .ql-snow.ql-toolbar button.ql-active .ql-stroke,
-#notebookPanel .ql-snow .ql-toolbar button.ql-active .ql-stroke,
-#notebookPanel .ql-snow.ql-toolbar .ql-picker-label:hover .ql-stroke,
-#notebookPanel .ql-snow .ql-toolbar .ql-picker-label:hover .ql-stroke,
-#notebookPanel .ql-snow.ql-toolbar .ql-picker-label.ql-active .ql-stroke,
-#notebookPanel .ql-snow .ql-toolbar .ql-picker-label.ql-active .ql-stroke,
-#notebookPanel .ql-snow.ql-toolbar .ql-picker-item:hover .ql-stroke,
-#notebookPanel .ql-snow .ql-toolbar .ql-picker-item:hover .ql-stroke,
-#notebookPanel .ql-snow.ql-toolbar .ql-picker-item.ql-selected .ql-stroke,
-#notebookPanel .ql-snow .ql-toolbar .ql-picker-item.ql-selected .ql-stroke,
-#notebookPanel .ql-snow.ql-toolbar button:hover .ql-stroke-miter,
-#notebookPanel .ql-snow .ql-toolbar button:hover .ql-stroke-miter,
-#notebookPanel .ql-snow.ql-toolbar button:focus .ql-stroke-miter,
-#notebookPanel .ql-snow .ql-toolbar button:focus .ql-stroke-miter,
-#notebookPanel .ql-snow.ql-toolbar button.ql-active .ql-stroke-miter,
-#notebookPanel .ql-snow .ql-toolbar button.ql-active .ql-stroke-miter,
-#notebookPanel .ql-snow.ql-toolbar .ql-picker-label:hover .ql-stroke-miter,
-#notebookPanel .ql-snow .ql-toolbar .ql-picker-label:hover .ql-stroke-miter,
-#notebookPanel .ql-snow.ql-toolbar .ql-picker-label.ql-active .ql-stroke-miter,
-#notebookPanel .ql-snow .ql-toolbar .ql-picker-label.ql-active .ql-stroke-miter,
-#notebookPanel .ql-snow.ql-toolbar .ql-picker-item:hover .ql-stroke-miter,
-#notebookPanel .ql-snow .ql-toolbar .ql-picker-item:hover .ql-stroke-miter,
-#notebookPanel .ql-snow.ql-toolbar .ql-picker-item.ql-selected .ql-stroke-miter,
-#notebookPanel .ql-snow .ql-toolbar .ql-picker-item.ql-selected .ql-stroke-miter {
+#notebookPlusPanel .ql-snow.ql-toolbar button:hover,
+#notebookPlusPanel .ql-snow .ql-toolbar button:hover,
+#notebookPlusPanel .ql-snow.ql-toolbar button:focus,
+#notebookPlusPanel .ql-snow .ql-toolbar button:focus,
+#notebookPlusPanel .ql-snow.ql-toolbar button.ql-active,
+#notebookPlusPanel .ql-snow .ql-toolbar button.ql-active,
+#notebookPlusPanel .ql-snow.ql-toolbar .ql-picker-label:hover,
+#notebookPlusPanel .ql-snow .ql-toolbar .ql-picker-label:hover,
+#notebookPlusPanel .ql-snow.ql-toolbar .ql-picker-label.ql-active,
+#notebookPlusPanel .ql-snow .ql-toolbar .ql-picker-label.ql-active,
+#notebookPlusPanel .ql-snow.ql-toolbar .ql-picker-item:hover,
+#notebookPlusPanel .ql-snow .ql-toolbar .ql-picker-item:hover,
+#notebookPlusPanel .ql-snow.ql-toolbar .ql-picker-item.ql-selected,
+#notebookPlusPanel .ql-snow .ql-toolbar .ql-picker-item.ql-selected,
+#notebookPlusPanel .ql-snow.ql-toolbar button:hover .ql-stroke,
+#notebookPlusPanel .ql-snow .ql-toolbar button:hover .ql-stroke,
+#notebookPlusPanel .ql-snow.ql-toolbar button:focus .ql-stroke,
+#notebookPlusPanel .ql-snow .ql-toolbar button:focus .ql-stroke,
+#notebookPlusPanel .ql-snow.ql-toolbar button.ql-active .ql-stroke,
+#notebookPlusPanel .ql-snow .ql-toolbar button.ql-active .ql-stroke,
+#notebookPlusPanel .ql-snow.ql-toolbar .ql-picker-label:hover .ql-stroke,
+#notebookPlusPanel .ql-snow .ql-toolbar .ql-picker-label:hover .ql-stroke,
+#notebookPlusPanel .ql-snow.ql-toolbar .ql-picker-label.ql-active .ql-stroke,
+#notebookPlusPanel .ql-snow .ql-toolbar .ql-picker-label.ql-active .ql-stroke,
+#notebookPlusPanel .ql-snow.ql-toolbar .ql-picker-item:hover .ql-stroke,
+#notebookPlusPanel .ql-snow .ql-toolbar .ql-picker-item:hover .ql-stroke,
+#notebookPlusPanel .ql-snow.ql-toolbar .ql-picker-item.ql-selected .ql-stroke,
+#notebookPlusPanel .ql-snow .ql-toolbar .ql-picker-item.ql-selected .ql-stroke,
+#notebookPlusPanel .ql-snow.ql-toolbar button:hover .ql-stroke-miter,
+#notebookPlusPanel .ql-snow .ql-toolbar button:hover .ql-stroke-miter,
+#notebookPlusPanel .ql-snow.ql-toolbar button:focus .ql-stroke-miter,
+#notebookPlusPanel .ql-snow .ql-toolbar button:focus .ql-stroke-miter,
+#notebookPlusPanel .ql-snow.ql-toolbar button.ql-active .ql-stroke-miter,
+#notebookPlusPanel .ql-snow .ql-toolbar button.ql-active .ql-stroke-miter,
+#notebookPlusPanel .ql-snow.ql-toolbar .ql-picker-label:hover .ql-stroke-miter,
+#notebookPlusPanel .ql-snow .ql-toolbar .ql-picker-label:hover .ql-stroke-miter,
+#notebookPlusPanel .ql-snow.ql-toolbar .ql-picker-label.ql-active .ql-stroke-miter,
+#notebookPlusPanel .ql-snow .ql-toolbar .ql-picker-label.ql-active .ql-stroke-miter,
+#notebookPlusPanel .ql-snow.ql-toolbar .ql-picker-item:hover .ql-stroke-miter,
+#notebookPlusPanel .ql-snow .ql-toolbar .ql-picker-item:hover .ql-stroke-miter,
+#notebookPlusPanel .ql-snow.ql-toolbar .ql-picker-item.ql-selected .ql-stroke-miter,
+#notebookPlusPanel .ql-snow .ql-toolbar .ql-picker-item.ql-selected .ql-stroke-miter {
     color: var(--SmartThemeBodyColor);
     filter: brightness(1.2) contrast(0.6);
     stroke: var(--SmartThemeBodyColor);
 }
 
-#notebookPanel .ql-container {
+#notebookPlusPanel .ql-container {
     font-size: var(--mainFontSize);
 }
 
-#notebookPanel .ql-clipboard {
+#notebookPlusPanel .ql-clipboard {
     position: fixed !important;
 }
 
-#notebookPanel #notebookPanelHolder {
+#notebookPlusPanel #notebookPlusPanelHolder {
     margin-top: 15px;
 }
 
-#notebookPanel .ql-editor ol,
-#notebookPanel .ql-editor ul {
+#notebookPlusPanel .ql-editor ol,
+#notebookPlusPanel .ql-editor ul {
     padding-left: 0.5em;
 }
