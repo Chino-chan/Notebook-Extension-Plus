@@ -53,44 +53,6 @@ function rememberHeaderSize(quill, headerValue, sizeValue) {
     getHeaderSizeMap(quill)[getHeaderSizeKey(headerValue)] = sizeValue;
 }
 
-function getActiveRange(quill) {
-    return quill.getSelection(true) ?? {
-        index: Math.max(quill.getLength() - 1, 0),
-        length: 0,
-    };
-}
-
-function getLineTextRange(quill, range) {
-    const [line, offset] = quill.getLine(range.index);
-
-    if (!line) {
-        return range;
-    }
-
-    return {
-        index: range.index - offset,
-        length: Math.max(line.length() - 1, 0),
-    };
-}
-
-function applySizeFormat(quill, range, sizeValue) {
-    if (!FONT_SIZE_OPTIONS.includes(sizeValue)) {
-        return;
-    }
-
-    if (range.length > 0) {
-        quill.formatText(range.index, range.length, 'size', sizeValue, Quill.sources.USER);
-    } else {
-        const lineRange = getLineTextRange(quill, range);
-
-        if (lineRange.length > 0) {
-            quill.formatText(lineRange.index, lineRange.length, 'size', sizeValue, Quill.sources.USER);
-        }
-    }
-
-    quill.format('size', sizeValue, Quill.sources.USER);
-}
-
 function showClipboardWarning(message) {
     if (globalThis.toastr?.warning) {
         globalThis.toastr.warning(message, 'Notebook-Plus', { timeOut: 4000 });
@@ -149,19 +111,19 @@ const quillModules = {
         handlers: {
             header(value) {
                 this.quill.focus();
-
-                const range = getActiveRange(this.quill);
                 const headerValue = normalizeHeaderValue(value);
                 const mappedSize = getMappedHeaderSize(this.quill, headerValue);
 
-                this.quill.formatLine(range.index, Math.max(range.length, 1), 'header', headerValue, Quill.sources.USER);
-                applySizeFormat(this.quill, range, mappedSize);
-                this.quill.setSelection(range.index, range.length, Quill.sources.SILENT);
+                this.quill.format('header', headerValue, Quill.sources.USER);
+                this.quill.format('size', mappedSize, Quill.sources.USER);
             },
             size(value) {
                 this.quill.focus();
 
-                const selection = getActiveRange(this.quill);
+                const selection = this.quill.getSelection(true) ?? {
+                    index: Math.max(this.quill.getLength() - 1, 0),
+                    length: 0,
+                };
                 const currentFormats = this.quill.getFormat(selection);
                 const currentHeader = normalizeHeaderValue(currentFormats.header);
                 const sizeValue = FONT_SIZE_OPTIONS.includes(value)
@@ -169,8 +131,7 @@ const quillModules = {
                     : getMappedHeaderSize(this.quill, currentHeader);
 
                 rememberHeaderSize(this.quill, currentHeader, sizeValue);
-                applySizeFormat(this.quill, selection, sizeValue);
-                this.quill.setSelection(selection.index, selection.length, Quill.sources.SILENT);
+                this.quill.format('size', sizeValue, Quill.sources.USER);
             },
             copy() {
                 const selection = this.quill.getSelection(true);
