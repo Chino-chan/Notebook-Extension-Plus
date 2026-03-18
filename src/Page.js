@@ -3,6 +3,15 @@ import React from 'react';
 import ReactQuill from 'react-quill-new';
 import 'react-quill-new/dist/quill.snow.css';
 
+const quillModules = {
+    toolbar: [
+        [{ header: ['1', '2', '3', false] }],
+        ['bold', 'italic', 'underline', 'link'],
+        [{ list: 'ordered' }, { list: 'bullet' }, { color: [] }, { background: [] }],
+        ['clean'],
+    ],
+};
+
 /**
  * Component for displaying a page in the notebook.
  * @param {object} props - Component props
@@ -17,7 +26,14 @@ export default function Page({ page, onChange }) {
                 <input placeholder="Enter a title..." className="text_pole flex1" type="text" value={page.title} onChange={(event) => onChange({ ...page, title: event.target.value })} />
                 <i className="right_menu_button fa-solid fa-trash" onClick={() => confirm('Are you sure?') && onChange(null)}></i>
             </div>
-            <ReactQuill placeholder="What's on your mind?" theme="snow" value={page.content} onChange={(content) => onChange({ ...page, content })} scrollingContainer={document.getElementById('notebookPlusPanelHolder')} />
+            <ReactQuill
+                placeholder="What's on your mind?"
+                theme="snow"
+                modules={quillModules}
+                value={page.content}
+                onChange={(content) => onChange({ ...page, content })}
+                scrollingContainer={document.getElementById('notebookPlusPanelHolder')}
+            />
         </div>
     );
 }

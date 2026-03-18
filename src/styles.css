@@ -105,6 +105,11 @@
     font-size: calc(var(--mainFontSize) * 0.9);
 }
 
+#notebookPlusPanel .ql-snow .ql-color-picker .ql-picker-item.ql-selected,
+#notebookPlusPanel .ql-snow .ql-color-picker .ql-picker-item:hover {
+    border-color: var(--SmartThemeBodyColor);
+}
+
 #notebookPlusPanel .ql-snow.ql-toolbar button:hover,
 #notebookPlusPanel .ql-snow .ql-toolbar button:hover,
 #notebookPlusPanel .ql-snow.ql-toolbar button:focus,
