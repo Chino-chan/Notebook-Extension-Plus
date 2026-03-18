@@ -4,7 +4,6 @@ import ReactQuill from 'react-quill-new';
 import 'react-quill-new/dist/quill.snow.css';
 
 const Quill = ReactQuill.Quill;
-const Delta = Quill.import('delta');
 const SizeStyle = Quill.import('attributors/style/size');
 const FONT_SIZE_OPTIONS = ['11px', '12px', '14px', '16px', '18px', '20px', '24px', '32px'];
 const PERSISTED_INLINE_FORMATS = ['color', 'size'];
@@ -57,6 +56,40 @@ function showClipboardWarning(message) {
     if (globalThis.toastr?.warning) {
         globalThis.toastr.warning(message, 'Notebook-Plus', { timeOut: 4000 });
     }
+}
+
+async function tryNativePaste(quill) {
+    return await new Promise((resolve) => {
+        let settled = false;
+
+        const finish = (didPaste) => {
+            if (settled) {
+                return;
+            }
+
+            settled = true;
+            clearTimeout(timeoutId);
+            quill.root.removeEventListener('paste', handlePaste);
+            resolve(didPaste);
+        };
+
+        const handlePaste = () => {
+            finish(true);
+        };
+
+        const timeoutId = window.setTimeout(() => {
+            finish(false);
+        }, 80);
+
+        quill.root.addEventListener('paste', handlePaste, { once: true });
+
+        try {
+            document.execCommand('paste');
+        } catch (error) {
+            console.warn('Native paste command failed in Notebook-Plus.', error);
+            finish(false);
+        }
+    });
 }
 
 async function readClipboardContents() {
@@ -160,12 +193,18 @@ const quillModules = {
             },
             async paste() {
                 this.quill.focus();
-                const range = this.quill.getSelection() ?? {
-                    index: Math.max(this.quill.getLength() - 1, 0),
-                    length: 0,
-                };
 
                 try {
+                    const pastedNatively = await tryNativePaste(this.quill);
+
+                    if (pastedNatively) {
+                        return;
+                    }
+
+                    const range = this.quill.getSelection(true) ?? {
+                        index: Math.max(this.quill.getLength() - 1, 0),
+                        length: 0,
+                    };
                     const { html, text } = await readClipboardContents();
 
                     if (!html && !text) {
@@ -173,17 +212,7 @@ const quillModules = {
                         return;
                     }
 
-                    const pastedDelta = html
-                        ? this.quill.clipboard.convert({ html, text })
-                        : new Delta().insert(text);
-                    const delta = new Delta()
-                        .retain(range.index)
-                        .delete(range.length)
-                        .concat(pastedDelta);
-
-                    this.quill.updateContents(delta, Quill.sources.USER);
-                    this.quill.setSelection(range.index + pastedDelta.length(), Quill.sources.SILENT);
-                    this.quill.scrollSelectionIntoView();
+                    this.quill.clipboard.onPaste(range, { html, text });
                 } catch (error) {
                     console.error('Failed to paste from the clipboard in Notebook-Plus', error);
                     showClipboardWarning('Failed to read clipboard. Check browser permission for clipboard access.');
