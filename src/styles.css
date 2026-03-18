@@ -170,7 +170,7 @@
 
 #notebookPlusPanel .ql-snow .ql-picker.ql-size .ql-picker-label::before,
 #notebookPlusPanel .ql-snow .ql-picker.ql-size .ql-picker-item::before {
-    content: 'Size';
+    content: '14';
 }
 
 #notebookPlusPanel .ql-snow .ql-picker.ql-size .ql-picker-label[data-value='11px']::before,
