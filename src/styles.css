@@ -146,7 +146,8 @@
 #notebookPlusPanel .ql-editor {
     line-height: normal;
     padding: 10px;
-    min-height: 15em;
+    min-height: 100%;
+    box-sizing: border-box;
 }
 
 #notebookPlusPanel .ql-editor.ql-blank::before {
@@ -309,6 +310,11 @@
 
 #notebookPlusPanel .ql-container {
     font-size: var(--mainFontSize);
+    min-height: 15em;
+    height: 15em;
+    resize: vertical;
+    overflow-x: hidden;
+    overflow-y: auto;
 }
 
 #notebookPlusPanel .ql-clipboard {
