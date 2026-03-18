@@ -3,6 +3,9 @@ import React from 'react';
 import ReactQuill from 'react-quill-new';
 import 'react-quill-new/dist/quill.snow.css';
 
+const Quill = ReactQuill.Quill;
+const PERSISTED_INLINE_FORMATS = ['color', 'background'];
+
 const quillModules = {
     toolbar: [
         [{ header: ['1', '2', '3', false] }],
@@ -10,6 +13,36 @@ const quillModules = {
         [{ list: 'ordered' }, { list: 'bullet' }, { color: [] }, { background: [] }],
         ['clean'],
     ],
+    keyboard: {
+        bindings: {
+            persistInlineFormatsOnEnter: {
+                key: 'Enter',
+                shiftKey: null,
+                collapsed: true,
+                handler(range, context) {
+                    const inlineFormats = PERSISTED_INLINE_FORMATS.reduce((formats, format) => {
+                        if (context.format[format] != null) {
+                            formats[format] = context.format[format];
+                        }
+
+                        return formats;
+                    }, {});
+
+                    if (Object.keys(inlineFormats).length === 0) {
+                        return true;
+                    }
+
+                    this.handleEnter(range, context);
+
+                    Object.entries(inlineFormats).forEach(([format, value]) => {
+                        this.quill.format(format, value, Quill.sources.USER);
+                    });
+
+                    return false;
+                },
+            },
+        },
+    },
 };
 
 /**
