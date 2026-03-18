@@ -52,143 +52,12 @@ function rememberHeaderSize(quill, headerValue, sizeValue) {
     getHeaderSizeMap(quill)[getHeaderSizeKey(headerValue)] = sizeValue;
 }
 
-function showClipboardWarning(message) {
-    if (globalThis.toastr?.warning) {
-        globalThis.toastr.warning(message, 'Notebook-Plus', { timeOut: 4000 });
-    }
-}
-
-function getClipboardApi() {
-    const clipboardCandidates = [globalThis.navigator];
-
-    try {
-        if (window.parent && window.parent !== window && window.parent.navigator) {
-            clipboardCandidates.push(window.parent.navigator);
-        }
-    } catch (error) {
-        console.warn('Parent navigator clipboard access failed in Notebook-Plus.', error);
-    }
-
-    try {
-        if (window.top && window.top !== window && window.top.navigator) {
-            clipboardCandidates.push(window.top.navigator);
-        }
-    } catch (error) {
-        console.warn('Top navigator clipboard access failed in Notebook-Plus.', error);
-    }
-
-    return clipboardCandidates.find((candidate) => candidate?.clipboard)?.clipboard ?? null;
-}
-
-async function readRichClipboardContents(clipboard) {
-    if (!clipboard?.read) {
-        return null;
-    }
-
-    try {
-        const clipboardItems = await clipboard.read();
-
-        for (const item of clipboardItems) {
-            const html = item.types.includes('text/html')
-                ? await (await item.getType('text/html')).text()
-                : '';
-            const text = item.types.includes('text/plain')
-                ? await (await item.getType('text/plain')).text()
-                : '';
-
-            if (html || text) {
-                return { html, text };
-            }
-        }
-    } catch (error) {
-        console.warn('Rich clipboard access failed in Notebook-Plus.', error);
-    }
-
-    return null;
-}
-
-async function captureExecCommandPasteText() {
-    return await new Promise((resolve) => {
-        const captureTarget = document.createElement('textarea');
-        let settled = false;
-
-        const finish = (value = '') => {
-            if (settled) {
-                return;
-            }
-
-            settled = true;
-            clearTimeout(timeoutId);
-            captureTarget.removeEventListener('paste', handlePaste);
-            captureTarget.remove();
-            resolve(value);
-        };
-
-        const handlePaste = () => {
-            window.setTimeout(() => finish(captureTarget.value), 0);
-        };
-
-        const timeoutId = window.setTimeout(() => {
-            finish(captureTarget.value);
-        }, 120);
-
-        captureTarget.setAttribute('aria-hidden', 'true');
-        captureTarget.tabIndex = -1;
-        captureTarget.style.position = 'fixed';
-        captureTarget.style.left = '-9999px';
-        captureTarget.style.top = '0';
-        captureTarget.style.opacity = '0';
-        captureTarget.style.pointerEvents = 'none';
-        document.body.appendChild(captureTarget);
-        captureTarget.addEventListener('paste', handlePaste, { once: true });
-        captureTarget.focus();
-        captureTarget.select();
-
-        try {
-            const commandAccepted = document.execCommand('paste');
-
-            if (!commandAccepted) {
-                finish('');
-            }
-        } catch (error) {
-            console.warn('execCommand paste fallback failed in Notebook-Plus.', error);
-            finish('');
-        }
-    });
-}
-
-async function readClipboardContents() {
-    const clipboard = getClipboardApi();
-
-    if (!clipboard) {
-        throw new Error('Clipboard API not available in this context.');
-    }
-
-    const textPromise = clipboard.readText
-        ? clipboard.readText().catch((error) => {
-            console.warn('Plain text clipboard access failed in Notebook-Plus.', error);
-            return '';
-        })
-        : Promise.resolve('');
-    const richContentPromise = readRichClipboardContents(clipboard);
-    const [text, richContent] = await Promise.all([textPromise, richContentPromise]);
-
-    if (richContent?.html || richContent?.text) {
-        return {
-            html: richContent.html ?? '',
-            text: richContent.text || text,
-        };
-    }
-
-    return { html: '', text };
-}
-
 const quillModules = {
     toolbar: {
         container: [
             [{ size: [false, ...FONT_SIZE_OPTIONS] }, { header: ['1', '2', '3', false] }],
             ['bold', 'italic', 'underline', 'link'],
-            [{ list: 'ordered' }, { list: 'bullet' }, { color: [] }, 'copy', 'paste'],
+            [{ list: 'ordered' }, { list: 'bullet' }, { color: [] }, 'copy'],
             ['clean'],
         ],
         handlers: {
@@ -239,44 +108,6 @@ const quillModules = {
 
                 if (shouldCopyWholeEditor) {
                     this.quill.setSelection(selection.index, selection.length, Quill.sources.SILENT);
-                }
-            },
-            async paste() {
-                this.quill.focus();
-
-                const range = this.quill.getSelection(true) ?? {
-                    index: Math.max(this.quill.getLength() - 1, 0),
-                    length: 0,
-                };
-                let clipboardContents = { html: '', text: '' };
-
-                try {
-                    clipboardContents = await readClipboardContents();
-                } catch (error) {
-                    console.warn('Clipboard API read failed in Notebook-Plus.', error);
-                }
-
-                try {
-                    const { html, text } = clipboardContents;
-
-                    if (html || text) {
-                        this.quill.focus();
-                        this.quill.clipboard.onPaste(range, { html, text });
-                        return;
-                    }
-
-                    const fallbackText = await captureExecCommandPasteText();
-
-                    if (fallbackText) {
-                        this.quill.focus();
-                        this.quill.clipboard.onPaste(range, { text: fallbackText });
-                        return;
-                    }
-
-                    showClipboardWarning('Clipboard is empty or browser access to paste is blocked.');
-                } catch (error) {
-                    console.error('Failed to paste from the clipboard in Notebook-Plus', error);
-                    showClipboardWarning('Failed to read clipboard. Check browser permission for clipboard access.');
                 }
             },
         },

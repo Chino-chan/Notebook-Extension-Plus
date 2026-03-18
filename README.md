@@ -7,7 +7,7 @@ https://github.com/SillyTavern/Extension-Notebook
 
 1. Now notes are divided either per "Character Card" or "Global".
 3. Inside "Character card" you can choose to store notes either for the card itself, or for specific chat files within the card.
-4. Added some text-color tools & copy to clipping tools for mobile users
+4. Added text-color tools and a copy-to-clipboard tool for mobile users
 
 
 <img width="1384" height="985" alt="image" src="https://github.com/user-attachments/assets/a18282d8-2e3e-44c7-98f6-bc787b703e2e" />

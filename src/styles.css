@@ -244,8 +244,7 @@
     border-color: var(--SmartThemeBodyColor);
 }
 
-#notebookPlusPanel .ql-toolbar.ql-snow button.ql-copy::after,
-#notebookPlusPanel .ql-toolbar.ql-snow button.ql-paste::after {
+#notebookPlusPanel .ql-toolbar.ql-snow button.ql-copy::after {
     display: block;
     font-family: 'Font Awesome 6 Free';
     font-size: 14px;
@@ -255,10 +254,6 @@
 
 #notebookPlusPanel .ql-toolbar.ql-snow button.ql-copy::after {
     content: '\f0c5';
-}
-
-#notebookPlusPanel .ql-toolbar.ql-snow button.ql-paste::after {
-    content: '\f0ea';
 }
 
 #notebookPlusPanel .ql-snow.ql-toolbar button:hover,
