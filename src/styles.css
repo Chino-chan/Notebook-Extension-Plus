@@ -164,6 +164,55 @@
     border-color: transparent;
 }
 
+#notebookPlusPanel .ql-toolbar.ql-snow .ql-picker.ql-size {
+    width: 4.4em;
+}
+
+#notebookPlusPanel .ql-snow .ql-picker.ql-size .ql-picker-label::before,
+#notebookPlusPanel .ql-snow .ql-picker.ql-size .ql-picker-item::before {
+    content: 'Size';
+}
+
+#notebookPlusPanel .ql-snow .ql-picker.ql-size .ql-picker-label[data-value='11px']::before,
+#notebookPlusPanel .ql-snow .ql-picker.ql-size .ql-picker-item[data-value='11px']::before {
+    content: '11';
+}
+
+#notebookPlusPanel .ql-snow .ql-picker.ql-size .ql-picker-label[data-value='12px']::before,
+#notebookPlusPanel .ql-snow .ql-picker.ql-size .ql-picker-item[data-value='12px']::before {
+    content: '12';
+}
+
+#notebookPlusPanel .ql-snow .ql-picker.ql-size .ql-picker-label[data-value='14px']::before,
+#notebookPlusPanel .ql-snow .ql-picker.ql-size .ql-picker-item[data-value='14px']::before {
+    content: '14';
+}
+
+#notebookPlusPanel .ql-snow .ql-picker.ql-size .ql-picker-label[data-value='16px']::before,
+#notebookPlusPanel .ql-snow .ql-picker.ql-size .ql-picker-item[data-value='16px']::before {
+    content: '16';
+}
+
+#notebookPlusPanel .ql-snow .ql-picker.ql-size .ql-picker-label[data-value='18px']::before,
+#notebookPlusPanel .ql-snow .ql-picker.ql-size .ql-picker-item[data-value='18px']::before {
+    content: '18';
+}
+
+#notebookPlusPanel .ql-snow .ql-picker.ql-size .ql-picker-label[data-value='20px']::before,
+#notebookPlusPanel .ql-snow .ql-picker.ql-size .ql-picker-item[data-value='20px']::before {
+    content: '20';
+}
+
+#notebookPlusPanel .ql-snow .ql-picker.ql-size .ql-picker-label[data-value='24px']::before,
+#notebookPlusPanel .ql-snow .ql-picker.ql-size .ql-picker-item[data-value='24px']::before {
+    content: '24';
+}
+
+#notebookPlusPanel .ql-snow .ql-picker.ql-size .ql-picker-label[data-value='32px']::before,
+#notebookPlusPanel .ql-snow .ql-picker.ql-size .ql-picker-item[data-value='32px']::before {
+    content: '32';
+}
+
 #notebookPlusPanel .ql-toolbar.ql-snow .ql-picker.ql-expanded .ql-picker-options,
 #notebookPlusPanel .ql-snow .ql-tooltip {
     border-color: var(--SmartThemeBorderColor);

@@ -5,10 +5,37 @@ import 'react-quill-new/dist/quill.snow.css';
 
 const Quill = ReactQuill.Quill;
 const Delta = Quill.import('delta');
-const PERSISTED_INLINE_FORMATS = ['color', 'background'];
+const SizeStyle = Quill.import('attributors/style/size');
+const FONT_SIZE_OPTIONS = ['11px', '12px', '14px', '16px', '18px', '20px', '24px', '32px'];
+const PERSISTED_INLINE_FORMATS = ['color', 'size'];
+
+SizeStyle.whitelist = FONT_SIZE_OPTIONS;
+Quill.register(SizeStyle, true);
+
+function showClipboardWarning(message) {
+    if (globalThis.toastr?.warning) {
+        globalThis.toastr.warning(message, 'Notebook-Plus', { timeOut: 4000 });
+    }
+}
 
 async function readClipboardContents() {
-    if (navigator.clipboard?.read) {
+    if (!navigator.clipboard) {
+        throw new Error('Clipboard API not available in this context.');
+    }
+
+    if (navigator.clipboard.readText) {
+        try {
+            const text = await navigator.clipboard.readText();
+
+            if (text) {
+                return { html: '', text };
+            }
+        } catch (error) {
+            console.warn('Plain text clipboard access failed in Notebook-Plus.', error);
+        }
+    }
+
+    if (navigator.clipboard.read) {
         try {
             const clipboardItems = await navigator.clipboard.read();
 
@@ -25,13 +52,8 @@ async function readClipboardContents() {
                 }
             }
         } catch (error) {
-            console.warn('Rich clipboard access failed in Notebook-Plus, falling back to plain text paste.', error);
+            console.warn('Rich clipboard access failed in Notebook-Plus.', error);
         }
-    }
-
-    if (navigator.clipboard?.readText) {
-        const text = await navigator.clipboard.readText();
-        return { html: '', text };
     }
 
     return { html: '', text: '' };
@@ -40,9 +62,9 @@ async function readClipboardContents() {
 const quillModules = {
     toolbar: {
         container: [
-            [{ header: ['1', '2', '3', false] }],
+            [{ size: [false, ...FONT_SIZE_OPTIONS] }, { header: ['1', '2', '3', false] }],
             ['bold', 'italic', 'underline', 'link'],
-            [{ list: 'ordered' }, { list: 'bullet' }, { color: [] }, { background: [] }, 'copy', 'paste'],
+            [{ list: 'ordered' }, { list: 'bullet' }, { color: [] }, 'copy', 'paste'],
             ['clean'],
         ],
         handlers: {
@@ -72,16 +94,17 @@ const quillModules = {
                 }
             },
             async paste() {
-                const range = this.quill.getSelection(true);
-
-                if (range == null) {
-                    return;
-                }
+                this.quill.focus();
+                const range = this.quill.getSelection() ?? {
+                    index: Math.max(this.quill.getLength() - 1, 0),
+                    length: 0,
+                };
 
                 try {
                     const { html, text } = await readClipboardContents();
 
                     if (!html && !text) {
+                        showClipboardWarning('Clipboard is empty or contains unsupported content.');
                         return;
                     }
 
@@ -98,6 +121,7 @@ const quillModules = {
                     this.quill.scrollSelectionIntoView();
                 } catch (error) {
                     console.error('Failed to paste from the clipboard in Notebook-Plus', error);
+                    showClipboardWarning('Failed to read clipboard. Check browser permission for clipboard access.');
                 }
             },
         },
