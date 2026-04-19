@@ -25,6 +25,7 @@ const dragElement = await importFromUrl('/scripts/RossAscends-mods.js', 'dragEle
 const NOTEBOOK_PLUS_PAGES_PATH = ['extensionSettings', 'notebookPlus', 'pages'];
 const NOTEBOOK_PLUS_CHARACTER_PAGES_PATH = ['extensionSettings', 'notebookPlus', 'characterPages'];
 const LEGACY_NOTEBOOK_PAGES_PATH = 'extensionSettings.notebook.pages';
+const NOTEBOOK_PLUS_CHARACTER_SETTINGS_PATH = ['extensionSettings', 'notebookPlus', 'characterSettings'];
 const CHARACTER_PAGES_GENERAL_KEY = '__generalPages';
 const CHARACTER_PAGES_CHATS_KEY = '__chatPages';
 const NOTES_MODE = {
@@ -42,7 +43,7 @@ function clampSelectedIndex(index, pageCount) {
 
 function getPagesForScope(notesMode, characterNotesScope, contextInfo, selectedCharacterChatId) {
     return notesMode === NOTES_MODE.CHARACTER
-        ? StateManager.getCharacterPages(contextInfo.characterKey, characterNotesScope, selectedCharacterChatId)
+    ? StateManager.getCharacterPages(contextInfo.characterKey, characterNotesScope, resolveStorageChatId(contextInfo.characterKey, selectedCharacterChatId))
         : StateManager.getGlobalPages();
 }
 
@@ -90,17 +91,24 @@ async function fetchCharacterChats(characterKey, currentChatId) {
         }
 
         const chatMap = await response.json();
-        return Object.values(chatMap)
+        const rawChats = Object.values(chatMap)
             .map((chat) => {
-                const chatId = chat?.file_name?.replace(/\.jsonl$/, '');
+                const fileId = chat?.file_name?.replace(/\.jsonl$/, '');
 
-                if (!chatId) {
+                if (!fileId) {
                     return null;
                 }
 
+                const meta = chat?.chat_metadata ?? {};
+                const integrity = typeof meta.integrity === 'string' && meta.integrity.length > 0 ? meta.integrity : null;
+                const chatIdHash = meta.chat_id_hash !== undefined && meta.chat_id_hash !== null ? String(meta.chat_id_hash) : null;
+                const stableKey = integrity || chatIdHash || fileId;
+
                 return {
-                    id: chatId,
-                    title: chatId,
+                    id: fileId,
+                    title: fileId,
+                    stableKey,
+                    meta,
                 };
             })
             .filter(Boolean)
@@ -115,10 +123,45 @@ async function fetchCharacterChats(characterKey, currentChatId) {
 
                 return left.title.localeCompare(right.title);
             });
+        // build per-character mapping fileId -> stableKey and perform migration
+        const mapping = rawChats.reduce((acc, c) => {
+            acc[c.id] = c.stableKey;
+            return acc;
+        }, {});
+
+        FILE_TO_META_MAP[characterKey] = mapping;
+
+        // migrate existing stored pages from fileId keys to stable keys (non-destructive copy)
+        try {
+            StateManager.migrateChatKeys(characterKey, mapping);
+
+            // If user enabled branch inheritance, copy parent pages into branch pages when empty
+            const inheritSetting = StateManager.getCharacterSetting(characterKey)?.inheritBranches;
+            if (inheritSetting) {
+                StateManager.copyParentPagesToBranchesIfEmpty(characterKey, rawChats, mapping);
+            }
+        } catch (err) {
+            // non-fatal
+            console.warn('Notebook-Plus migration/branch-copy failed for', characterKey, err);
+        }
+
+        return rawChats;
     } catch (error) {
         console.error('Failed to load character chats for Notebook-Plus', error);
         return [];
     }
+}
+
+// Module-level per-character mapping from fileId -> stable metadata key
+const FILE_TO_META_MAP = {};
+
+function resolveStorageChatId(characterKey, fileId) {
+    if (!characterKey || !fileId) {
+        return fileId || '';
+    }
+
+    const map = FILE_TO_META_MAP[characterKey] || {};
+    return map[fileId] || fileId;
 }
 
 function normalizeCharacterPagesBucket(bucket) {
@@ -253,7 +296,21 @@ class StateManager {
             return bucket[CHARACTER_PAGES_GENERAL_KEY];
         }
 
-        return Array.isArray(bucket[CHARACTER_PAGES_CHATS_KEY][chatId]) ? bucket[CHARACTER_PAGES_CHATS_KEY][chatId] : [];
+        // Primary: try requested chatId (may be stable metadata key)
+        if (Array.isArray(bucket[CHARACTER_PAGES_CHATS_KEY][chatId])) {
+            return bucket[CHARACTER_PAGES_CHATS_KEY][chatId];
+        }
+
+        // Fallback: if we have a mapping for this character, try to locate a legacy fileId that maps to this stable key
+        const map = FILE_TO_META_MAP[characterKey] || {};
+        const legacyFileId = Object.keys(map).find((fileId) => map[fileId] === chatId);
+
+        if (legacyFileId && Array.isArray(bucket[CHARACTER_PAGES_CHATS_KEY][legacyFileId])) {
+            return bucket[CHARACTER_PAGES_CHATS_KEY][legacyFileId];
+        }
+
+        // Final fallback: return empty
+        return [];
     }
 
     /**
@@ -315,6 +372,137 @@ class StateManager {
         _.unset(context, [...NOTEBOOK_PLUS_CHARACTER_PAGES_PATH, oldCharacterKey]);
         context.saveSettingsDebounced();
     }
+
+    /**
+     * Migrate stored per-character chat pages from fileId keys to stable metadata keys.
+     * @param {string} characterKey Character avatar key
+     * @param {{[fileId:string]:string}} mapping Map of fileId -> stableKey
+     */
+    static migrateChatKeys(characterKey, mapping) {
+        if (!characterKey || !mapping || Object.keys(mapping).length === 0) {
+            return;
+        }
+
+        const context = SillyTavern.getContext();
+        const bucket = normalizeCharacterPagesBucket(_.get(context, [...NOTEBOOK_PLUS_CHARACTER_PAGES_PATH, characterKey]));
+        const chatPages = bucket[CHARACTER_PAGES_CHATS_KEY] || {};
+
+        let mutated = false;
+
+        Object.entries(mapping).forEach(([fileId, stableKey]) => {
+            if (!fileId || !stableKey || fileId === stableKey) {
+                return;
+            }
+
+            // Non-destructive copy: if pages are stored under the legacy filename key and there
+            // is not already content under the stable key, copy them there but keep the legacy key.
+            if (Array.isArray(chatPages[fileId]) && !Array.isArray(chatPages[stableKey])) {
+                chatPages[stableKey] = chatPages[fileId];
+                mutated = true;
+            }
+        });
+
+        if (mutated) {
+            _.set(context, [...NOTEBOOK_PLUS_CHARACTER_PAGES_PATH, characterKey], bucket);
+            context.saveSettingsDebounced();
+        }
+    }
+
+    /**
+     * Get character-specific settings for Notebook-Plus.
+     * @param {string} characterKey
+     * @returns {{inheritBranches?:boolean}} settings
+     */
+    static getCharacterSetting(characterKey) {
+        if (!characterKey) {
+            return {};
+        }
+
+        const context = SillyTavern.getContext();
+        const settings = _.get(context, [...NOTEBOOK_PLUS_CHARACTER_SETTINGS_PATH, characterKey]);
+        return _.isPlainObject(settings) ? settings : {};
+    }
+
+    /**
+     * Set character-specific settings for Notebook-Plus.
+     * @param {string} characterKey
+     * @param {{inheritBranches?:boolean}} settings
+     */
+    static setCharacterSetting(characterKey, settings) {
+        if (!characterKey) {
+            return;
+        }
+
+        const context = SillyTavern.getContext();
+        _.set(context, [...NOTEBOOK_PLUS_CHARACTER_SETTINGS_PATH, characterKey], settings);
+        context.saveSettingsDebounced();
+    }
+
+    /**
+     * Copy parent (main_chat) pages into branch pages if branch page list is empty.
+     * Non-destructive: only copies when destination has no pages.
+     * @param {string} characterKey
+     * @param {Array} rawChats Array of chat objects with {id, stableKey, meta}
+     * @param {{[fileId:string]:string}} mapping
+     */
+    static copyParentPagesToBranchesIfEmpty(characterKey, rawChats, mapping) {
+        if (!characterKey || !Array.isArray(rawChats) || rawChats.length === 0) {
+            return;
+        }
+
+        const context = SillyTavern.getContext();
+        const bucket = normalizeCharacterPagesBucket(_.get(context, [...NOTEBOOK_PLUS_CHARACTER_PAGES_PATH, characterKey]));
+        const chatPages = bucket[CHARACTER_PAGES_CHATS_KEY] || {};
+        let mutated = false;
+
+        // Build reverse map stableKey -> fileId for lookups
+        const reverseMap = Object.entries(mapping).reduce((acc, [fileId, stableKey]) => {
+            acc[stableKey] = fileId;
+            return acc;
+        }, {});
+
+        rawChats.forEach((chat) => {
+            const mainChatVal = chat?.meta?.main_chat;
+            if (!mainChatVal) {
+                return;
+            }
+
+            // try to find parent fileId by matching rawChats' id or title to main_chat string
+            const parent = rawChats.find((c) => c.id === mainChatVal || c.title === mainChatVal || c.stableKey === mainChatVal);
+            const parentFileId = parent?.id || null;
+
+            // If not found by exact match, also try to lookup by reverseMap (main_chat may be stable key)
+            const parentStableKey = parent?.stableKey || null;
+
+            if (!parentFileId && parentStableKey && reverseMap[parentStableKey]) {
+                // got fileId from reverseMap
+                // nothing else
+            }
+
+            // Determine source and destination storage keys
+            const childFileId = chat.id;
+            const childStable = chat.stableKey;
+            const parentKey = parentFileId ? mapping[parentFileId] : (chat.meta && chat.meta.main_chat ? chat.meta.main_chat : null);
+
+            if (!parentKey) {
+                return;
+            }
+
+            const destHas = Array.isArray(chatPages[childStable]) && chatPages[childStable].length > 0;
+            if (!destHas) {
+                const parentPages = Array.isArray(chatPages[parentKey]) ? chatPages[parentKey] : (Array.isArray(chatPages[parentFileId]) ? chatPages[parentFileId] : null);
+                if (Array.isArray(parentPages) && parentPages.length > 0) {
+                    chatPages[childStable] = _.cloneDeep(parentPages);
+                    mutated = true;
+                }
+            }
+        });
+
+        if (mutated) {
+            _.set(context, [...NOTEBOOK_PLUS_CHARACTER_PAGES_PATH, characterKey], bucket);
+            context.saveSettingsDebounced();
+        }
+    }
 }
 
 function App({ onCloseClicked }) {
@@ -324,6 +512,7 @@ function App({ onCloseClicked }) {
     const [characterNotesScope, setCharacterNotesScope] = useState(CHARACTER_NOTES_SCOPE.CHAT);
     const [contextInfo, setContextInfo] = useState(() => getNotebookContextSnapshot());
     const [characterChats, setCharacterChats] = useState([]);
+    const [inheritBranches, setInheritBranches] = useState(false);
     const [selectedCharacterChatId, setSelectedCharacterChatId] = useState(() => getNotebookContextSnapshot().currentChatId);
     const refreshRequestRef = useRef(0);
     const contextInfoRef = useRef(contextInfo);
@@ -332,6 +521,18 @@ function App({ onCloseClicked }) {
     useEffect(() => {
         contextInfoRef.current = contextInfo;
     }, [contextInfo]);
+
+    useEffect(() => {
+        // update inheritBranches when character key changes
+        const key = contextInfo.characterKey;
+        if (!key) {
+            setInheritBranches(false);
+            return;
+        }
+
+        const setting = StateManager.getCharacterSetting(key);
+        setInheritBranches(Boolean(setting?.inheritBranches));
+    }, [contextInfo.characterKey]);
 
     useEffect(() => {
         selectedCharacterChatIdRef.current = selectedCharacterChatId;
@@ -362,6 +563,10 @@ function App({ onCloseClicked }) {
             }
 
             setCharacterChats(chats);
+
+            // ensure current inheritBranches state reflects saved setting (in case it changed externally)
+            const setting = StateManager.getCharacterSetting(snapshot.characterKey);
+            setInheritBranches(Boolean(setting?.inheritBranches));
 
             const shouldKeepSelectedChat = preserveSelectedChat && previousContextInfo.characterKey === snapshot.characterKey;
             const preferredChatId = shouldKeepSelectedChat ? selectedCharacterChatIdRef.current : snapshot.currentChatId;
@@ -412,7 +617,13 @@ function App({ onCloseClicked }) {
 
     function persistPages(nextPages) {
         if (notesMode === NOTES_MODE.CHARACTER) {
-            StateManager.setCharacterPages(contextInfo.characterKey, characterNotesScope, selectedCharacterChatId, nextPages);
+            const storageChatId = resolveStorageChatId(contextInfo.characterKey, selectedCharacterChatId);
+            StateManager.setCharacterPages(contextInfo.characterKey, characterNotesScope, storageChatId, nextPages);
+
+            // For compatibility with older versions, also write to the legacy filename key if different.
+            if (selectedCharacterChatId && storageChatId !== selectedCharacterChatId) {
+                StateManager.setCharacterPages(contextInfo.characterKey, characterNotesScope, selectedCharacterChatId, nextPages);
+            }
             return;
         }
 
@@ -534,6 +745,27 @@ function App({ onCloseClicked }) {
                                 ))
                             )}
                         </select>
+                        <label style={{ marginLeft: '8px', display: 'inline-flex', alignItems: 'center' }}>
+                            <input
+                                type="checkbox"
+                                checked={inheritBranches}
+                                onChange={(e) => {
+                                    const next = Boolean(e.target.checked);
+                                    setInheritBranches(next);
+                                    StateManager.setCharacterSetting(contextInfo.characterKey, { inheritBranches: next });
+
+                                    if (next && contextInfo.characterKey) {
+                                        // run copy-once for branches now
+                                        try {
+                                            StateManager.copyParentPagesToBranchesIfEmpty(contextInfo.characterKey, characterChats, FILE_TO_META_MAP[contextInfo.characterKey] || {});
+                                        } catch (err) {
+                                            console.warn('Branch inherit copy failed', err);
+                                        }
+                                    }
+                                }}
+                            />
+                            <span style={{ marginLeft: '6px' }}>Branches inherit this chatfile notes</span>
+                        </label>
                     </div>
                 </div>
                 <Tabs key={activeScopeKey} selectedIndex={selectedIndex} onSelect={handleTabSelect}>
