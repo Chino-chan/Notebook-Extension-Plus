@@ -127,13 +127,50 @@ async function fetchCharacterChats(characterKey, currentChatId) {
         const persisted = StateManager.getFileToMetaMap(characterKey) || {};
         const mapping = {};
 
+        function tokenize(s) {
+            return new Set(String(s || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean));
+        }
+
+        function jaccard(a, b) {
+            const A = tokenize(a);
+            const B = tokenize(b);
+            if (A.size === 0 && B.size === 0) return 1;
+            const inter = Array.from(A).filter((x) => B.has(x)).length;
+            const uni = new Set([...A, ...B]).size;
+            return uni === 0 ? 0 : inter / uni;
+        }
+
+        const SIMILARITY_THRESHOLD = 0.45;
+
         rawChats.forEach((c) => {
             const fileId = c.id;
             const meta = c.meta || {};
             const integrity = typeof meta.integrity === 'string' && meta.integrity.length > 0 ? meta.integrity : null;
             const chatIdHash = meta.chat_id_hash !== undefined && meta.chat_id_hash !== null ? String(meta.chat_id_hash) : null;
 
-            let stableKey = integrity || chatIdHash || persisted[fileId] || null;
+            let stableKey = integrity || chatIdHash || null;
+
+            // Prefer exact persisted mapping
+            if (!stableKey && persisted[fileId]) {
+                stableKey = persisted[fileId];
+            }
+
+            // Attempt to detect a rename by matching against persisted keys
+            if (!stableKey) {
+                let best = { score: 0, key: null };
+                Object.keys(persisted).forEach((oldFileId) => {
+                    const score = jaccard(fileId, oldFileId);
+                    if (score > best.score) {
+                        best = { score, key: oldFileId };
+                    }
+                });
+
+                if (best.score >= SIMILARITY_THRESHOLD && persisted[best.key]) {
+                    stableKey = persisted[best.key];
+                    console.debug('NotebookPlus:adoptMapping', { characterKey, newFileId: fileId, from: best.key, score: best.score, stableKey });
+                }
+            }
+
             if (!stableKey) {
                 stableKey = generateStableId(fileId);
             }
