@@ -123,17 +123,31 @@ async function fetchCharacterChats(characterKey, currentChatId) {
 
                 return left.title.localeCompare(right.title);
             });
-        // build per-character mapping fileId -> stableKey and perform migration
-        const mapping = rawChats.reduce((acc, c) => {
-            acc[c.id] = c.stableKey;
-            return acc;
-        }, {});
+        // Build or update persisted mapping (fileId -> stableKey).
+        const persisted = StateManager.getFileToMetaMap(characterKey) || {};
+        const mapping = {};
 
+        rawChats.forEach((c) => {
+            const fileId = c.id;
+            const meta = c.meta || {};
+            const integrity = typeof meta.integrity === 'string' && meta.integrity.length > 0 ? meta.integrity : null;
+            const chatIdHash = meta.chat_id_hash !== undefined && meta.chat_id_hash !== null ? String(meta.chat_id_hash) : null;
+
+            let stableKey = integrity || chatIdHash || persisted[fileId] || null;
+            if (!stableKey) {
+                stableKey = generateStableId(fileId);
+            }
+
+            mapping[fileId] = stableKey;
+        });
+
+        // persist mapping and cache
+        StateManager.setFileToMetaMap(characterKey, mapping);
         FILE_TO_META_MAP[characterKey] = mapping;
 
-        // migrate existing stored pages from fileId keys to stable keys (non-destructive copy)
+        // DESCTRUCTIVE migration: move legacy filename keys to stable keys and remove legacy keys.
         try {
-            StateManager.migrateChatKeys(characterKey, mapping);
+            StateManager.migrateChatKeys(characterKey, mapping, { destructive: true });
 
             // If user enabled branch inheritance, copy parent pages into branch pages when empty
             const inheritSetting = StateManager.getCharacterSetting(characterKey)?.inheritBranches;
@@ -152,12 +166,28 @@ async function fetchCharacterChats(characterKey, currentChatId) {
     }
 }
 
-// Module-level per-character mapping from fileId -> stable metadata key
+// Module-level per-character mapping from fileId -> stable metadata key (cached)
 const FILE_TO_META_MAP = {};
+
+function generateStableId(fileId) {
+    // deterministic-ish fallback: use fileId plus random suffix to avoid collisions
+    // if fileId is long, trim it
+    const base = String(fileId).replace(/\s+/g, '-').slice(0, 40);
+    const suffix = Math.random().toString(36).slice(2, 8);
+    return `${base}::st::${suffix}`;
+}
 
 function resolveStorageChatId(characterKey, fileId) {
     if (!characterKey || !fileId) {
         return fileId || '';
+    }
+
+    // Prefer persisted mapping if available
+    try {
+        const persisted = StateManager.getFileToMetaMap(characterKey) || {};
+        if (persisted[fileId]) return persisted[fileId];
+    } catch (e) {
+        // ignore and fallback
     }
 
     const map = FILE_TO_META_MAP[characterKey] || {};
@@ -379,6 +409,13 @@ class StateManager {
      * @param {{[fileId:string]:string}} mapping Map of fileId -> stableKey
      */
     static migrateChatKeys(characterKey, mapping) {
+        // Backwards-compatible migrate: copy legacy filename keys into stable keys.
+        // This implementation can be destructive if desired by caller (we'll default
+        // to destructive=false). To allow destructive migration, callers may pass
+        // an options object with {destructive:true} when calling this method.
+        const options = arguments[2] || {};
+        const destructive = Boolean(options.destructive);
+
         if (!characterKey || !mapping || Object.keys(mapping).length === 0) {
             return;
         }
@@ -394,11 +431,16 @@ class StateManager {
                 return;
             }
 
-            // Non-destructive copy: if pages are stored under the legacy filename key and there
-            // is not already content under the stable key, copy them there but keep the legacy key.
-            if (Array.isArray(chatPages[fileId]) && !Array.isArray(chatPages[stableKey])) {
-                chatPages[stableKey] = chatPages[fileId];
+            // If legacy pages exist under the filename, move/copy them to stable key.
+            if (Array.isArray(chatPages[fileId])) {
+                // If destructive, overwrite stableKey with legacy content.
+                chatPages[stableKey] = _.cloneDeep(chatPages[fileId]);
                 mutated = true;
+
+                if (destructive) {
+                    // remove legacy key
+                    delete chatPages[fileId];
+                }
             }
         });
 
@@ -406,6 +448,29 @@ class StateManager {
             _.set(context, [...NOTEBOOK_PLUS_CHARACTER_PAGES_PATH, characterKey], bucket);
             context.saveSettingsDebounced();
         }
+    }
+
+    /**
+     * Get persisted fileId -> stableKey mapping for a character.
+     * @param {string} characterKey
+     */
+    static getFileToMetaMap(characterKey) {
+        if (!characterKey) return {};
+        const context = SillyTavern.getContext();
+        const map = _.get(context, ['extensionSettings', 'notebookPlus', 'fileToMetaMap', characterKey]);
+        return _.isPlainObject(map) ? map : {};
+    }
+
+    /**
+     * Persist fileId -> stableKey mapping for a character.
+     * @param {string} characterKey
+     * @param {{[fileId:string]:string}} map
+     */
+    static setFileToMetaMap(characterKey, map) {
+        if (!characterKey || !_.isPlainObject(map)) return;
+        const context = SillyTavern.getContext();
+        _.set(context, ['extensionSettings', 'notebookPlus', 'fileToMetaMap', characterKey], map);
+        context.saveSettingsDebounced();
     }
 
     /**
