@@ -409,6 +409,32 @@ class StateManager {
     }
 
     /**
+     * Copy pages from a source storage key to destination storage key if destination is empty.
+     * Non-destructive.
+     * @param {string} characterKey
+     * @param {string} fromStorageKey
+     * @param {string} toStorageKey
+     */
+    static copyPagesFromToIfEmpty(characterKey, fromStorageKey, toStorageKey) {
+        if (!characterKey || !fromStorageKey || !toStorageKey || fromStorageKey === toStorageKey) {
+            return;
+        }
+
+        const context = SillyTavern.getContext();
+        const bucket = normalizeCharacterPagesBucket(_.get(context, [...NOTEBOOK_PLUS_CHARACTER_PAGES_PATH, characterKey]));
+        const chatPages = bucket[CHARACTER_PAGES_CHATS_KEY] || {};
+
+        const destHas = Array.isArray(chatPages[toStorageKey]) && chatPages[toStorageKey].length > 0;
+        const srcHas = Array.isArray(chatPages[fromStorageKey]) && chatPages[fromStorageKey].length > 0;
+
+        if (!destHas && srcHas) {
+            chatPages[toStorageKey] = _.cloneDeep(chatPages[fromStorageKey]);
+            _.set(context, [...NOTEBOOK_PLUS_CHARACTER_PAGES_PATH, characterKey], bucket);
+            context.saveSettingsDebounced();
+        }
+    }
+
+    /**
      * Get character-specific settings for Notebook-Plus.
      * @param {string} characterKey
      * @returns {{inheritBranches?:boolean}} settings
@@ -461,36 +487,62 @@ class StateManager {
             return acc;
         }, {});
 
+        function normalizeKey(s) {
+            return typeof s === 'string' ? s.replace(/\s+/g, ' ').trim().toLowerCase() : s;
+        }
+
         rawChats.forEach((chat) => {
             const mainChatVal = chat?.meta?.main_chat;
             if (!mainChatVal) {
                 return;
             }
 
-            // try to find parent fileId by matching rawChats' id or title to main_chat string
-            const parent = rawChats.find((c) => c.id === mainChatVal || c.title === mainChatVal || c.stableKey === mainChatVal);
-            const parentFileId = parent?.id || null;
+            const normalizedMain = normalizeKey(mainChatVal);
 
-            // If not found by exact match, also try to lookup by reverseMap (main_chat may be stable key)
-            const parentStableKey = parent?.stableKey || null;
-
-            if (!parentFileId && parentStableKey && reverseMap[parentStableKey]) {
-                // got fileId from reverseMap
-                // nothing else
+            // try to find parent by multiple strategies
+            let parent = rawChats.find((c) => c.id === mainChatVal || c.title === mainChatVal || c.stableKey === mainChatVal);
+            if (!parent) {
+                parent = rawChats.find((c) => normalizeKey(c.id) === normalizedMain || normalizeKey(c.title) === normalizedMain || String(c.stableKey) === normalizedMain);
             }
 
-            // Determine source and destination storage keys
-            const childFileId = chat.id;
+            // if still not found, try reverseMap (mainChatVal could be a stableKey)
+            let parentFileId = parent?.id || null;
+            if (!parentFileId && reverseMap[mainChatVal]) {
+                parentFileId = reverseMap[mainChatVal];
+            }
+
+            // Also check if mainChatVal directly matches a mapping key
+            if (!parentFileId && mapping[mainChatVal]) {
+                parentFileId = mainChatVal;
+            }
+
             const childStable = chat.stableKey;
-            const parentKey = parentFileId ? mapping[parentFileId] : (chat.meta && chat.meta.main_chat ? chat.meta.main_chat : null);
 
-            if (!parentKey) {
-                return;
+            // candidate parent keys to look up in stored pages
+            const candidateParentKeys = [];
+            if (parentFileId) {
+                const parentStable = mapping[parentFileId] || null;
+                if (parentStable) candidateParentKeys.push(parentStable);
+                candidateParentKeys.push(parentFileId);
             }
+
+            // also include mainChatVal and any reverseMap matches
+            if (mainChatVal) candidateParentKeys.push(mainChatVal);
+            if (reverseMap[mainChatVal]) candidateParentKeys.push(reverseMap[mainChatVal]);
+
+            // make unique
+            const uniqCandidates = Array.from(new Set(candidateParentKeys.filter(Boolean)));
 
             const destHas = Array.isArray(chatPages[childStable]) && chatPages[childStable].length > 0;
             if (!destHas) {
-                const parentPages = Array.isArray(chatPages[parentKey]) ? chatPages[parentKey] : (Array.isArray(chatPages[parentFileId]) ? chatPages[parentFileId] : null);
+                let parentPages = null;
+                for (const key of uniqCandidates) {
+                    if (Array.isArray(chatPages[key]) && chatPages[key].length > 0) {
+                        parentPages = chatPages[key];
+                        break;
+                    }
+                }
+
                 if (Array.isArray(parentPages) && parentPages.length > 0) {
                     chatPages[childStable] = _.cloneDeep(parentPages);
                     mutated = true;
@@ -573,6 +625,38 @@ function App({ onCloseClicked }) {
             const nextSelectedChatId = chats.some((chat) => chat.id === preferredChatId)
                 ? preferredChatId
                 : chats[0]?.id ?? '';
+
+            // If branch inheritance is enabled, and the next selected chat is a branch whose
+            // `main_chat` points to the previous chat, copy parent pages to the branch if empty.
+            try {
+                const inheritSetting = StateManager.getCharacterSetting(snapshot.characterKey)?.inheritBranches;
+                if (inheritSetting && previousContextInfo.characterKey === snapshot.characterKey) {
+                    const prevChatId = previousContextInfo.currentChatId;
+                    const mapping = FILE_TO_META_MAP[snapshot.characterKey] || {};
+                    const nextChatObj = chats.find((c) => c.id === nextSelectedChatId);
+
+                    if (prevChatId && nextChatObj && nextChatObj.meta && nextChatObj.meta.main_chat) {
+                        const mainVal = nextChatObj.meta.main_chat;
+                        const prevStable = mapping[prevChatId] || prevChatId;
+
+                        const normalize = (s) => (typeof s === 'string' ? s.replace(/\s+/g, ' ').trim().toLowerCase() : '');
+                        const matchesPrev = (mainVal === prevChatId)
+                            || (mainVal === prevStable)
+                            || (mapping[mainVal] === prevChatId)
+                            || (mapping[mainVal] === prevStable)
+                            || (normalize(mainVal) === normalize(prevChatId))
+                            || (normalize(mainVal) === normalize(prevStable));
+
+                        if (matchesPrev) {
+                            const srcKey = prevStable;
+                            const dstKey = mapping[nextSelectedChatId] || nextSelectedChatId;
+                            StateManager.copyPagesFromToIfEmpty(snapshot.characterKey, srcKey, dstKey);
+                        }
+                    }
+                }
+            } catch (err) {
+                console.warn('Branch inheritance check failed', err);
+            }
 
             setSelectedCharacterChatId(nextSelectedChatId);
         }
