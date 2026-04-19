@@ -25,7 +25,6 @@ const dragElement = await importFromUrl('/scripts/RossAscends-mods.js', 'dragEle
 const NOTEBOOK_PLUS_PAGES_PATH = ['extensionSettings', 'notebookPlus', 'pages'];
 const NOTEBOOK_PLUS_CHARACTER_PAGES_PATH = ['extensionSettings', 'notebookPlus', 'characterPages'];
 const LEGACY_NOTEBOOK_PAGES_PATH = 'extensionSettings.notebook.pages';
-const NOTEBOOK_PLUS_CHARACTER_SETTINGS_PATH = ['extensionSettings', 'notebookPlus', 'characterSettings'];
 const CHARACTER_PAGES_GENERAL_KEY = '__generalPages';
 const CHARACTER_PAGES_CHATS_KEY = '__chatPages';
 const NOTES_MODE = {
@@ -108,7 +107,6 @@ async function fetchCharacterChats(characterKey, currentChatId) {
                     id: fileId,
                     title: fileId,
                     stableKey,
-                    meta,
                 };
             })
             .filter(Boolean)
@@ -123,77 +121,20 @@ async function fetchCharacterChats(characterKey, currentChatId) {
 
                 return left.title.localeCompare(right.title);
             });
-        // Build or update persisted mapping (fileId -> stableKey).
-        const persisted = StateManager.getFileToMetaMap(characterKey) || {};
-        const mapping = {};
+        // build per-character mapping fileId -> stableKey and perform migration
+        const mapping = rawChats.reduce((acc, c) => {
+            acc[c.id] = c.stableKey;
+            return acc;
+        }, {});
 
-        function tokenize(s) {
-            return new Set(String(s || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean));
-        }
-
-        function jaccard(a, b) {
-            const A = tokenize(a);
-            const B = tokenize(b);
-            if (A.size === 0 && B.size === 0) return 1;
-            const inter = Array.from(A).filter((x) => B.has(x)).length;
-            const uni = new Set([...A, ...B]).size;
-            return uni === 0 ? 0 : inter / uni;
-        }
-
-        const SIMILARITY_THRESHOLD = 0.45;
-
-        rawChats.forEach((c) => {
-            const fileId = c.id;
-            const meta = c.meta || {};
-            const integrity = typeof meta.integrity === 'string' && meta.integrity.length > 0 ? meta.integrity : null;
-            const chatIdHash = meta.chat_id_hash !== undefined && meta.chat_id_hash !== null ? String(meta.chat_id_hash) : null;
-
-            let stableKey = integrity || chatIdHash || null;
-
-            // Prefer exact persisted mapping
-            if (!stableKey && persisted[fileId]) {
-                stableKey = persisted[fileId];
-            }
-
-            // Attempt to detect a rename by matching against persisted keys
-            if (!stableKey) {
-                let best = { score: 0, key: null };
-                Object.keys(persisted).forEach((oldFileId) => {
-                    const score = jaccard(fileId, oldFileId);
-                    if (score > best.score) {
-                        best = { score, key: oldFileId };
-                    }
-                });
-
-                if (best.score >= SIMILARITY_THRESHOLD && persisted[best.key]) {
-                    stableKey = persisted[best.key];
-                    console.debug('NotebookPlus:adoptMapping', { characterKey, newFileId: fileId, from: best.key, score: best.score, stableKey });
-                }
-            }
-
-            if (!stableKey) {
-                stableKey = generateStableId(fileId);
-            }
-
-            mapping[fileId] = stableKey;
-        });
-
-        // persist mapping and cache
-        StateManager.setFileToMetaMap(characterKey, mapping);
         FILE_TO_META_MAP[characterKey] = mapping;
 
-        // DESCTRUCTIVE migration: move legacy filename keys to stable keys and remove legacy keys.
+        // migrate existing stored pages from fileId keys to stable keys
         try {
-            StateManager.migrateChatKeys(characterKey, mapping, { destructive: true });
-
-            // If user enabled branch inheritance, copy parent pages into branch pages when empty
-            const inheritSetting = StateManager.getCharacterSetting(characterKey)?.inheritBranches;
-            if (inheritSetting) {
-                StateManager.copyParentPagesToBranchesIfEmpty(characterKey, rawChats, mapping);
-            }
+            StateManager.migrateChatKeys(characterKey, mapping);
         } catch (err) {
             // non-fatal
-            console.warn('Notebook-Plus migration/branch-copy failed for', characterKey, err);
+            console.warn('Notebook-Plus migration failed for', characterKey, err);
         }
 
         return rawChats;
@@ -203,28 +144,12 @@ async function fetchCharacterChats(characterKey, currentChatId) {
     }
 }
 
-// Module-level per-character mapping from fileId -> stable metadata key (cached)
+// Module-level per-character mapping from fileId -> stable metadata key
 const FILE_TO_META_MAP = {};
-
-function generateStableId(fileId) {
-    // deterministic-ish fallback: use fileId plus random suffix to avoid collisions
-    // if fileId is long, trim it
-    const base = String(fileId).replace(/\s+/g, '-').slice(0, 40);
-    const suffix = Math.random().toString(36).slice(2, 8);
-    return `${base}::st::${suffix}`;
-}
 
 function resolveStorageChatId(characterKey, fileId) {
     if (!characterKey || !fileId) {
         return fileId || '';
-    }
-
-    // Prefer persisted mapping if available
-    try {
-        const persisted = StateManager.getFileToMetaMap(characterKey) || {};
-        if (persisted[fileId]) return persisted[fileId];
-    } catch (e) {
-        // ignore and fallback
     }
 
     const map = FILE_TO_META_MAP[characterKey] || {};
@@ -446,13 +371,6 @@ class StateManager {
      * @param {{[fileId:string]:string}} mapping Map of fileId -> stableKey
      */
     static migrateChatKeys(characterKey, mapping) {
-        // Backwards-compatible migrate: copy legacy filename keys into stable keys.
-        // This implementation can be destructive if desired by caller (we'll default
-        // to destructive=false). To allow destructive migration, callers may pass
-        // an options object with {destructive:true} when calling this method.
-        const options = arguments[2] || {};
-        const destructive = Boolean(options.destructive);
-
         if (!characterKey || !mapping || Object.keys(mapping).length === 0) {
             return;
         }
@@ -468,187 +386,11 @@ class StateManager {
                 return;
             }
 
-            // If legacy pages exist under the filename, move/copy them to stable key.
-            if (Array.isArray(chatPages[fileId])) {
-                // If destructive, overwrite stableKey with legacy content.
-                chatPages[stableKey] = _.cloneDeep(chatPages[fileId]);
+            // Non-destructive copy: if pages are stored under the legacy filename key and there
+            // is not already content under the stable key, copy them there but keep the legacy key.
+            if (Array.isArray(chatPages[fileId]) && !Array.isArray(chatPages[stableKey])) {
+                chatPages[stableKey] = chatPages[fileId];
                 mutated = true;
-
-                if (destructive) {
-                    // remove legacy key
-                    delete chatPages[fileId];
-                }
-            }
-        });
-
-        if (mutated) {
-            _.set(context, [...NOTEBOOK_PLUS_CHARACTER_PAGES_PATH, characterKey], bucket);
-            context.saveSettingsDebounced();
-        }
-    }
-
-    /**
-     * Get persisted fileId -> stableKey mapping for a character.
-     * @param {string} characterKey
-     */
-    static getFileToMetaMap(characterKey) {
-        if (!characterKey) return {};
-        const context = SillyTavern.getContext();
-        const map = _.get(context, ['extensionSettings', 'notebookPlus', 'fileToMetaMap', characterKey]);
-        return _.isPlainObject(map) ? map : {};
-    }
-
-    /**
-     * Persist fileId -> stableKey mapping for a character.
-     * @param {string} characterKey
-     * @param {{[fileId:string]:string}} map
-     */
-    static setFileToMetaMap(characterKey, map) {
-        if (!characterKey || !_.isPlainObject(map)) return;
-        const context = SillyTavern.getContext();
-        _.set(context, ['extensionSettings', 'notebookPlus', 'fileToMetaMap', characterKey], map);
-        context.saveSettingsDebounced();
-    }
-
-    /**
-     * Copy pages from a source storage key to destination storage key if destination is empty.
-     * Non-destructive.
-     * @param {string} characterKey
-     * @param {string} fromStorageKey
-     * @param {string} toStorageKey
-     */
-    static copyPagesFromToIfEmpty(characterKey, fromStorageKey, toStorageKey) {
-        if (!characterKey || !fromStorageKey || !toStorageKey || fromStorageKey === toStorageKey) {
-            return;
-        }
-
-        const context = SillyTavern.getContext();
-        const bucket = normalizeCharacterPagesBucket(_.get(context, [...NOTEBOOK_PLUS_CHARACTER_PAGES_PATH, characterKey]));
-        const chatPages = bucket[CHARACTER_PAGES_CHATS_KEY] || {};
-
-        const destHas = Array.isArray(chatPages[toStorageKey]) && chatPages[toStorageKey].length > 0;
-        const srcHas = Array.isArray(chatPages[fromStorageKey]) && chatPages[fromStorageKey].length > 0;
-
-        if (!destHas && srcHas) {
-            chatPages[toStorageKey] = _.cloneDeep(chatPages[fromStorageKey]);
-            _.set(context, [...NOTEBOOK_PLUS_CHARACTER_PAGES_PATH, characterKey], bucket);
-            context.saveSettingsDebounced();
-        }
-    }
-
-    /**
-     * Get character-specific settings for Notebook-Plus.
-     * @param {string} characterKey
-     * @returns {{inheritBranches?:boolean}} settings
-     */
-    static getCharacterSetting(characterKey) {
-        if (!characterKey) {
-            return {};
-        }
-
-        const context = SillyTavern.getContext();
-        const settings = _.get(context, [...NOTEBOOK_PLUS_CHARACTER_SETTINGS_PATH, characterKey]);
-        return _.isPlainObject(settings) ? settings : {};
-    }
-
-    /**
-     * Set character-specific settings for Notebook-Plus.
-     * @param {string} characterKey
-     * @param {{inheritBranches?:boolean}} settings
-     */
-    static setCharacterSetting(characterKey, settings) {
-        if (!characterKey) {
-            return;
-        }
-
-        const context = SillyTavern.getContext();
-        _.set(context, [...NOTEBOOK_PLUS_CHARACTER_SETTINGS_PATH, characterKey], settings);
-        context.saveSettingsDebounced();
-    }
-
-    /**
-     * Copy parent (main_chat) pages into branch pages if branch page list is empty.
-     * Non-destructive: only copies when destination has no pages.
-     * @param {string} characterKey
-     * @param {Array} rawChats Array of chat objects with {id, stableKey, meta}
-     * @param {{[fileId:string]:string}} mapping
-     */
-    static copyParentPagesToBranchesIfEmpty(characterKey, rawChats, mapping) {
-        if (!characterKey || !Array.isArray(rawChats) || rawChats.length === 0) {
-            return;
-        }
-
-        const context = SillyTavern.getContext();
-        const bucket = normalizeCharacterPagesBucket(_.get(context, [...NOTEBOOK_PLUS_CHARACTER_PAGES_PATH, characterKey]));
-        const chatPages = bucket[CHARACTER_PAGES_CHATS_KEY] || {};
-        let mutated = false;
-
-        // Build reverse map stableKey -> fileId for lookups
-        const reverseMap = Object.entries(mapping).reduce((acc, [fileId, stableKey]) => {
-            acc[stableKey] = fileId;
-            return acc;
-        }, {});
-
-        function normalizeKey(s) {
-            return typeof s === 'string' ? s.replace(/\s+/g, ' ').trim().toLowerCase() : s;
-        }
-
-        rawChats.forEach((chat) => {
-            const mainChatVal = chat?.meta?.main_chat;
-            if (!mainChatVal) {
-                return;
-            }
-
-            const normalizedMain = normalizeKey(mainChatVal);
-
-            // try to find parent by multiple strategies
-            let parent = rawChats.find((c) => c.id === mainChatVal || c.title === mainChatVal || c.stableKey === mainChatVal);
-            if (!parent) {
-                parent = rawChats.find((c) => normalizeKey(c.id) === normalizedMain || normalizeKey(c.title) === normalizedMain || String(c.stableKey) === normalizedMain);
-            }
-
-            // if still not found, try reverseMap (mainChatVal could be a stableKey)
-            let parentFileId = parent?.id || null;
-            if (!parentFileId && reverseMap[mainChatVal]) {
-                parentFileId = reverseMap[mainChatVal];
-            }
-
-            // Also check if mainChatVal directly matches a mapping key
-            if (!parentFileId && mapping[mainChatVal]) {
-                parentFileId = mainChatVal;
-            }
-
-            const childStable = chat.stableKey;
-
-            // candidate parent keys to look up in stored pages
-            const candidateParentKeys = [];
-            if (parentFileId) {
-                const parentStable = mapping[parentFileId] || null;
-                if (parentStable) candidateParentKeys.push(parentStable);
-                candidateParentKeys.push(parentFileId);
-            }
-
-            // also include mainChatVal and any reverseMap matches
-            if (mainChatVal) candidateParentKeys.push(mainChatVal);
-            if (reverseMap[mainChatVal]) candidateParentKeys.push(reverseMap[mainChatVal]);
-
-            // make unique
-            const uniqCandidates = Array.from(new Set(candidateParentKeys.filter(Boolean)));
-
-            const destHas = Array.isArray(chatPages[childStable]) && chatPages[childStable].length > 0;
-            if (!destHas) {
-                let parentPages = null;
-                for (const key of uniqCandidates) {
-                    if (Array.isArray(chatPages[key]) && chatPages[key].length > 0) {
-                        parentPages = chatPages[key];
-                        break;
-                    }
-                }
-
-                if (Array.isArray(parentPages) && parentPages.length > 0) {
-                    chatPages[childStable] = _.cloneDeep(parentPages);
-                    mutated = true;
-                }
             }
         });
 
@@ -666,7 +408,6 @@ function App({ onCloseClicked }) {
     const [characterNotesScope, setCharacterNotesScope] = useState(CHARACTER_NOTES_SCOPE.CHAT);
     const [contextInfo, setContextInfo] = useState(() => getNotebookContextSnapshot());
     const [characterChats, setCharacterChats] = useState([]);
-    const [inheritBranches, setInheritBranches] = useState(false);
     const [selectedCharacterChatId, setSelectedCharacterChatId] = useState(() => getNotebookContextSnapshot().currentChatId);
     const refreshRequestRef = useRef(0);
     const contextInfoRef = useRef(contextInfo);
@@ -675,18 +416,6 @@ function App({ onCloseClicked }) {
     useEffect(() => {
         contextInfoRef.current = contextInfo;
     }, [contextInfo]);
-
-    useEffect(() => {
-        // update inheritBranches when character key changes
-        const key = contextInfo.characterKey;
-        if (!key) {
-            setInheritBranches(false);
-            return;
-        }
-
-        const setting = StateManager.getCharacterSetting(key);
-        setInheritBranches(Boolean(setting?.inheritBranches));
-    }, [contextInfo.characterKey]);
 
     useEffect(() => {
         selectedCharacterChatIdRef.current = selectedCharacterChatId;
@@ -718,47 +447,11 @@ function App({ onCloseClicked }) {
 
             setCharacterChats(chats);
 
-            // ensure current inheritBranches state reflects saved setting (in case it changed externally)
-            const setting = StateManager.getCharacterSetting(snapshot.characterKey);
-            setInheritBranches(Boolean(setting?.inheritBranches));
-
             const shouldKeepSelectedChat = preserveSelectedChat && previousContextInfo.characterKey === snapshot.characterKey;
             const preferredChatId = shouldKeepSelectedChat ? selectedCharacterChatIdRef.current : snapshot.currentChatId;
             const nextSelectedChatId = chats.some((chat) => chat.id === preferredChatId)
                 ? preferredChatId
                 : chats[0]?.id ?? '';
-
-            // If branch inheritance is enabled, and the next selected chat is a branch whose
-            // `main_chat` points to the previous chat, copy parent pages to the branch if empty.
-            try {
-                const inheritSetting = StateManager.getCharacterSetting(snapshot.characterKey)?.inheritBranches;
-                if (inheritSetting && previousContextInfo.characterKey === snapshot.characterKey) {
-                    const prevChatId = previousContextInfo.currentChatId;
-                    const mapping = FILE_TO_META_MAP[snapshot.characterKey] || {};
-                    const nextChatObj = chats.find((c) => c.id === nextSelectedChatId);
-
-                    if (prevChatId && nextChatObj && nextChatObj.meta && nextChatObj.meta.main_chat) {
-                        const mainVal = nextChatObj.meta.main_chat;
-                        const prevStable = mapping[prevChatId] || prevChatId;
-
-                        const normalize = (s) => (typeof s === 'string' ? s.replace(/\s+/g, ' ').trim().toLowerCase() : '');
-                        const matchesPrev = (mainVal === prevChatId)
-                            || (mainVal === prevStable)
-                            || (mapping[mainVal] === prevChatId)
-                            || (mapping[mainVal] === prevStable)
-                            || (normalize(mainVal) === normalize(prevChatId))
-                            || (normalize(mainVal) === normalize(prevStable));
-
-                        if (matchesPrev) {
-                            const srcKey = prevStable;
-                            const dstKey = mapping[nextSelectedChatId] || nextSelectedChatId;
-                            StateManager.copyPagesFromToIfEmpty(snapshot.characterKey, srcKey, dstKey);
-                        }
-                    }
-                }
-            } catch (err) {
-                console.warn('Branch inheritance check failed', err);
-            }
 
             setSelectedCharacterChatId(nextSelectedChatId);
         }
@@ -931,27 +624,6 @@ function App({ onCloseClicked }) {
                                 ))
                             )}
                         </select>
-                        <label style={{ marginLeft: '8px', display: 'inline-flex', alignItems: 'center' }}>
-                            <input
-                                type="checkbox"
-                                checked={inheritBranches}
-                                onChange={(e) => {
-                                    const next = Boolean(e.target.checked);
-                                    setInheritBranches(next);
-                                    StateManager.setCharacterSetting(contextInfo.characterKey, { inheritBranches: next });
-
-                                    if (next && contextInfo.characterKey) {
-                                        // run copy-once for branches now
-                                        try {
-                                            StateManager.copyParentPagesToBranchesIfEmpty(contextInfo.characterKey, characterChats, FILE_TO_META_MAP[contextInfo.characterKey] || {});
-                                        } catch (err) {
-                                            console.warn('Branch inherit copy failed', err);
-                                        }
-                                    }
-                                }}
-                            />
-                            <span style={{ marginLeft: '6px' }}>Branches inherit this chatfile notes</span>
-                        </label>
                     </div>
                 </div>
                 <Tabs key={activeScopeKey} selectedIndex={selectedIndex} onSelect={handleTabSelect}>
