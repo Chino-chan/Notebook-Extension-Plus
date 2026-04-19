@@ -9,6 +9,7 @@ https://github.com/SillyTavern/Extension-Notebook
 3. Inside "Character card" you can choose to store notes either for the card itself, or for specific chat files within the card.
 4. Added text-color tools and a copy-to-clipboard tool for mobile users
 
+You open this extension by clicking the magic wand. 
 
 <img width="1384" height="985" alt="image" src="https://github.com/user-attachments/assets/a18282d8-2e3e-44c7-98f6-bc787b703e2e" />
 <img width="1393" height="984" alt="image" src="https://github.com/user-attachments/assets/a98dad16-339b-4878-b4db-6551e6e489f4" />
