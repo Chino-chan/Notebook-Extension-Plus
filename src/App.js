@@ -28,6 +28,7 @@ const LEGACY_NOTEBOOK_PAGES_PATH = 'extensionSettings.notebook.pages';
 const CHARACTER_PAGES_GENERAL_KEY = '__generalPages';
 const CHARACTER_PAGES_CHATS_KEY = '__chatPages';
 const CHARACTER_PAGES_INTEGRITY_KEY = '__chatPagesByIntegrity';
+const CHARACTER_PAGES_STORAGE_KEYS_KEY = '__chatStorageKeysByFilename';
 const NOTEBOOK_PLUS_CHAT_METADATA_KEY = 'notebookPlusChatKey';
 const NOTES_MODE = {
     CHARACTER: 'character',
@@ -75,18 +76,17 @@ function getNotebookContextSnapshot() {
         characterKey: character?.avatar ?? '',
         characterName: character?.name ?? '',
         currentChatId: isSingleCharacterChat ? context.chatId ?? '' : '',
-        currentChatStorageKey: isSingleCharacterChat
-            ? context.chatMetadata?.[NOTEBOOK_PLUS_CHAT_METADATA_KEY] ?? context.chatMetadata?.integrity ?? ''
-            : '',
-        currentChatIntegrityId: isSingleCharacterChat ? context.chatMetadata?.integrity ?? '' : '',
+        currentChatStorageKey: isSingleCharacterChat ? context.chatMetadata?.[NOTEBOOK_PLUS_CHAT_METADATA_KEY] ?? '' : '',
         selectedChatStorageKey: '',
     };
 }
 
-function chatNeedsDedicatedStorageKey(chatMetadata) {
-    return _.isPlainObject(chatMetadata)
-        && Boolean(chatMetadata.main_chat)
-        && !chatMetadata[NOTEBOOK_PLUS_CHAT_METADATA_KEY];
+function isDerivedChatFilename(chatId) {
+    if (!chatId) {
+        return false;
+    }
+
+    return / - Branch #\d+$/i.test(chatId) || / - Checkpoint #\d+$/i.test(chatId);
 }
 
 function generateChatIntegrityId() {
@@ -198,10 +198,28 @@ function buildChatHeader(chatHeader, chatMetadata) {
     };
 }
 
+function normalizeChatStorageKeysMap(storageKeysByFilename, activeChatIds = []) {
+    const activeChatIdSet = new Set(activeChatIds.filter(Boolean));
+
+    return Object.entries(_.isPlainObject(storageKeysByFilename) ? storageKeysByFilename : {}).reduce((resolvedMap, [chatId, storageKey]) => {
+        if (typeof storageKey !== 'string' || !storageKey) {
+            return resolvedMap;
+        }
+
+        if (activeChatIdSet.size > 0 && !activeChatIdSet.has(chatId)) {
+            return resolvedMap;
+        }
+
+        resolvedMap[chatId] = storageKey;
+        return resolvedMap;
+    }, {});
+}
+
 async function ensureCharacterChatStorageKey(characterKey, chatId, options = {}) {
     const {
         currentChatId = '',
         currentChatMetadata = null,
+        activeChatIds = [],
     } = options;
 
     let chatData = [];
@@ -223,20 +241,48 @@ async function ensureCharacterChatStorageKey(characterKey, chatId, options = {})
     }
 
     let didChangeMetadata = false;
+    let didChangeBucket = false;
+    const bucket = getCharacterPagesBucket(characterKey);
+    const normalizedStorageKeysByFilename = normalizeChatStorageKeysMap(bucket[CHARACTER_PAGES_STORAGE_KEYS_KEY], [...activeChatIds, chatId]);
+
+    if (!_.isEqual(normalizedStorageKeysByFilename, bucket[CHARACTER_PAGES_STORAGE_KEYS_KEY])) {
+        bucket[CHARACTER_PAGES_STORAGE_KEYS_KEY] = normalizedStorageKeysByFilename;
+        didChangeBucket = true;
+    }
 
     if (!chatMetadata.integrity) {
         chatMetadata.integrity = generateChatIntegrityId();
         didChangeMetadata = true;
     }
 
-    const sourceKey = chatMetadata.integrity;
+    const inheritedStorageKey = typeof chatMetadata[NOTEBOOK_PLUS_CHAT_METADATA_KEY] === 'string'
+        ? chatMetadata[NOTEBOOK_PLUS_CHAT_METADATA_KEY]
+        : '';
+    const sourceKey = inheritedStorageKey || chatMetadata.integrity;
+    let storageKey = normalizedStorageKeysByFilename[chatId] ?? '';
 
-    if (chatMetadata.main_chat && !chatMetadata[NOTEBOOK_PLUS_CHAT_METADATA_KEY]) {
-        chatMetadata[NOTEBOOK_PLUS_CHAT_METADATA_KEY] = generateChatIntegrityId();
-        didChangeMetadata = true;
+    if (!storageKey) {
+        if (isDerivedChatFilename(chatId)) {
+            storageKey = generateChatIntegrityId();
+            chatMetadata[NOTEBOOK_PLUS_CHAT_METADATA_KEY] = storageKey;
+            didChangeMetadata = true;
+        } else {
+            storageKey = inheritedStorageKey || chatMetadata.integrity;
+
+            if (inheritedStorageKey && chatMetadata[NOTEBOOK_PLUS_CHAT_METADATA_KEY] !== inheritedStorageKey) {
+                chatMetadata[NOTEBOOK_PLUS_CHAT_METADATA_KEY] = inheritedStorageKey;
+                didChangeMetadata = true;
+            }
+        }
+
+        bucket[CHARACTER_PAGES_STORAGE_KEYS_KEY][chatId] = storageKey;
+        didChangeBucket = true;
     }
 
-    const storageKey = chatMetadata[NOTEBOOK_PLUS_CHAT_METADATA_KEY] || chatMetadata.integrity || '';
+    if (chatMetadata[NOTEBOOK_PLUS_CHAT_METADATA_KEY] && chatMetadata[NOTEBOOK_PLUS_CHAT_METADATA_KEY] !== storageKey) {
+        chatMetadata[NOTEBOOK_PLUS_CHAT_METADATA_KEY] = storageKey;
+        didChangeMetadata = true;
+    }
 
     if (didChangeMetadata) {
         if (isCurrentChat) {
@@ -249,6 +295,10 @@ async function ensureCharacterChatStorageKey(characterKey, chatId, options = {})
         }
     }
 
+    if (didChangeBucket) {
+        saveCharacterPagesBucket(characterKey, bucket);
+    }
+
     return { storageKey, sourceKey };
 }
 
@@ -258,6 +308,7 @@ function normalizeCharacterPagesBucket(bucket) {
             [CHARACTER_PAGES_GENERAL_KEY]: [],
             [CHARACTER_PAGES_CHATS_KEY]: {},
             [CHARACTER_PAGES_INTEGRITY_KEY]: {},
+            [CHARACTER_PAGES_STORAGE_KEYS_KEY]: {},
         };
     }
 
@@ -265,6 +316,7 @@ function normalizeCharacterPagesBucket(bucket) {
         Array.isArray(bucket[CHARACTER_PAGES_GENERAL_KEY])
         || _.isPlainObject(bucket[CHARACTER_PAGES_CHATS_KEY])
         || _.isPlainObject(bucket[CHARACTER_PAGES_INTEGRITY_KEY])
+        || _.isPlainObject(bucket[CHARACTER_PAGES_STORAGE_KEYS_KEY])
     ) {
         const chatPages = _.isPlainObject(bucket[CHARACTER_PAGES_CHATS_KEY])
             ? Object.entries(bucket[CHARACTER_PAGES_CHATS_KEY]).reduce((pagesByChat, [chatId, pages]) => {
@@ -284,11 +336,13 @@ function normalizeCharacterPagesBucket(bucket) {
                 return pagesByIntegrity;
             }, {})
             : {};
+        const storageKeysByFilename = normalizeChatStorageKeysMap(bucket[CHARACTER_PAGES_STORAGE_KEYS_KEY]);
 
         return {
             [CHARACTER_PAGES_GENERAL_KEY]: Array.isArray(bucket[CHARACTER_PAGES_GENERAL_KEY]) ? bucket[CHARACTER_PAGES_GENERAL_KEY] : [],
             [CHARACTER_PAGES_CHATS_KEY]: chatPages,
             [CHARACTER_PAGES_INTEGRITY_KEY]: integrityPages,
+            [CHARACTER_PAGES_STORAGE_KEYS_KEY]: storageKeysByFilename,
         };
     }
 
@@ -304,7 +358,50 @@ function normalizeCharacterPagesBucket(bucket) {
         [CHARACTER_PAGES_GENERAL_KEY]: [],
         [CHARACTER_PAGES_CHATS_KEY]: legacyChatPages,
         [CHARACTER_PAGES_INTEGRITY_KEY]: {},
+        [CHARACTER_PAGES_STORAGE_KEYS_KEY]: {},
     };
+}
+
+function getCharacterPagesBucket(characterKey) {
+    if (!characterKey) {
+        return normalizeCharacterPagesBucket({});
+    }
+
+    const context = SillyTavern.getContext();
+    return normalizeCharacterPagesBucket(_.get(context, [...NOTEBOOK_PLUS_CHARACTER_PAGES_PATH, characterKey]));
+}
+
+function saveCharacterPagesBucket(characterKey, bucket) {
+    if (!characterKey) {
+        return;
+    }
+
+    const context = SillyTavern.getContext();
+    _.set(context, [...NOTEBOOK_PLUS_CHARACTER_PAGES_PATH, characterKey], bucket);
+    context.saveSettingsDebounced();
+}
+
+function getPersistedChatStorageKey(characterKey, chatId) {
+    if (!characterKey || !chatId) {
+        return '';
+    }
+
+    const bucket = getCharacterPagesBucket(characterKey);
+    return bucket[CHARACTER_PAGES_STORAGE_KEYS_KEY][chatId] ?? '';
+}
+
+function getSafeCurrentChatStorageKey(characterKey, chatId, currentChatId, currentChatStorageKey) {
+    if (!characterKey || !chatId || chatId !== currentChatId || !currentChatStorageKey) {
+        return '';
+    }
+
+    const persistedStorageKey = getPersistedChatStorageKey(characterKey, chatId);
+
+    if (persistedStorageKey || !isDerivedChatFilename(chatId)) {
+        return currentChatStorageKey;
+    }
+
+    return '';
 }
 
 function getCharacterDropdownPlaceholder(notesMode, characterNotesScope, characterName) {
@@ -494,6 +591,7 @@ class StateManager {
             previousPages[CHARACTER_PAGES_GENERAL_KEY].length === 0
             && Object.keys(previousPages[CHARACTER_PAGES_CHATS_KEY]).length === 0
             && Object.keys(previousPages[CHARACTER_PAGES_INTEGRITY_KEY]).length === 0
+            && Object.keys(previousPages[CHARACTER_PAGES_STORAGE_KEYS_KEY]).length === 0
         ) {
             return;
         }
@@ -510,6 +608,10 @@ class StateManager {
             [CHARACTER_PAGES_INTEGRITY_KEY]: {
                 ...previousPages[CHARACTER_PAGES_INTEGRITY_KEY],
                 ...currentPages[CHARACTER_PAGES_INTEGRITY_KEY],
+            },
+            [CHARACTER_PAGES_STORAGE_KEYS_KEY]: {
+                ...previousPages[CHARACTER_PAGES_STORAGE_KEYS_KEY],
+                ...currentPages[CHARACTER_PAGES_STORAGE_KEYS_KEY],
             },
         };
 
@@ -576,24 +678,25 @@ function App({ onCloseClicked }) {
         const {
             currentChatId = '',
             currentChatMetadata = null,
+            activeChatIds = [],
         } = options;
 
         if (!characterKey || !chatId) {
             return '';
         }
 
-        const requiresDedicatedStorageKey = chatId === currentChatId && chatNeedsDedicatedStorageKey(currentChatMetadata);
         const cachedStorageKey = getCachedChatStorageKey(characterKey, chatId)
-            || characterChats.find((chat) => chat.id === chatId)?.storageKey
+            || getPersistedChatStorageKey(characterKey, chatId)
             || '';
 
-        if (cachedStorageKey && !requiresDedicatedStorageKey) {
+        if (cachedStorageKey) {
             return { storageKey: cachedStorageKey, sourceKey: '' };
         }
 
         const result = await ensureCharacterChatStorageKey(characterKey, chatId, {
             currentChatId,
             currentChatMetadata,
+            activeChatIds,
         });
 
         if (result.storageKey) {
@@ -628,19 +731,27 @@ function App({ onCloseClicked }) {
                 return;
             }
 
-            setCharacterChats(chats);
+            const storageKeysByFilename = getCharacterPagesBucket(snapshot.characterKey)[CHARACTER_PAGES_STORAGE_KEYS_KEY];
+            const nextChats = chats.map((chat) => ({
+                ...chat,
+                storageKey: getCachedChatStorageKey(snapshot.characterKey, chat.id)
+                    || storageKeysByFilename[chat.id]
+                    || getSafeCurrentChatStorageKey(snapshot.characterKey, chat.id, snapshot.currentChatId, snapshot.currentChatStorageKey),
+            }));
 
-            if (snapshot.currentChatId && snapshot.currentChatStorageKey) {
+            setCharacterChats(nextChats);
+
+            if (getSafeCurrentChatStorageKey(snapshot.characterKey, snapshot.currentChatId, snapshot.currentChatId, snapshot.currentChatStorageKey)) {
                 setCachedChatStorageKey(snapshot.characterKey, snapshot.currentChatId, snapshot.currentChatStorageKey);
             }
 
             const shouldKeepSelectedChat = preserveSelectedChat && previousContextInfo.characterKey === snapshot.characterKey;
             const preferredChatId = shouldKeepSelectedChat ? selectedCharacterChatIdRef.current : snapshot.currentChatId;
-            const nextSelectedChatId = chats.some((chat) => chat.id === preferredChatId)
+            const nextSelectedChatId = nextChats.some((chat) => chat.id === preferredChatId)
                 ? preferredChatId
-                : chats[0]?.id ?? '';
-            const nextSelectedChatStorageKey = chats.find((chat) => chat.id === nextSelectedChatId)?.storageKey
-                ?? (nextSelectedChatId === snapshot.currentChatId ? snapshot.currentChatStorageKey : '');
+                : nextChats[0]?.id ?? '';
+            const nextSelectedChatStorageKey = nextChats.find((chat) => chat.id === nextSelectedChatId)?.storageKey
+                ?? getSafeCurrentChatStorageKey(snapshot.characterKey, nextSelectedChatId, snapshot.currentChatId, snapshot.currentChatStorageKey);
 
             setSelectedCharacterChatId(nextSelectedChatId);
             setSelectedCharacterChatStorageKey(nextSelectedChatStorageKey);
@@ -680,7 +791,6 @@ function App({ onCloseClicked }) {
     useEffect(() => {
         let cancelled = false;
         const activeChatMetadata = selectedCharacterChatId === contextInfo.currentChatId ? SillyTavern.getContext().chatMetadata : null;
-        const requiresDedicatedStorageKey = chatNeedsDedicatedStorageKey(activeChatMetadata);
 
         if (
             notesMode !== NOTES_MODE.CHARACTER
@@ -693,11 +803,13 @@ function App({ onCloseClicked }) {
         }
 
         const knownStorageKey = getCachedChatStorageKey(contextInfo.characterKey, selectedCharacterChatId)
+            || getPersistedChatStorageKey(contextInfo.characterKey, selectedCharacterChatId)
             || characterChats.find((chat) => chat.id === selectedCharacterChatId)?.storageKey
-            || (
-                selectedCharacterChatId === contextInfo.currentChatId && !requiresDedicatedStorageKey
-                    ? contextInfo.currentChatStorageKey
-                    : ''
+            || getSafeCurrentChatStorageKey(
+                contextInfo.characterKey,
+                selectedCharacterChatId,
+                contextInfo.currentChatId,
+                contextInfo.currentChatStorageKey,
             );
 
         setSelectedCharacterChatStorageKey(knownStorageKey);
@@ -706,6 +818,7 @@ function App({ onCloseClicked }) {
             const { storageKey, sourceKey } = await resolveCharacterChatStorageKey(contextInfo.characterKey, selectedCharacterChatId, {
                 currentChatId: contextInfo.currentChatId,
                 currentChatMetadata: activeChatMetadata,
+                activeChatIds: characterChats.map((chat) => chat.id),
             });
 
             if (cancelled) {
@@ -766,8 +879,14 @@ function App({ onCloseClicked }) {
 
     function switchToScope(nextNotesMode, nextCharacterNotesScope = characterNotesScope, nextSelectedCharacterChatId = selectedCharacterChatId) {
         const nextSelectedCharacterChatStorageKey = getCachedChatStorageKey(contextInfo.characterKey, nextSelectedCharacterChatId)
+            || getPersistedChatStorageKey(contextInfo.characterKey, nextSelectedCharacterChatId)
             || characterChats.find((chat) => chat.id === nextSelectedCharacterChatId)?.storageKey
-            || (nextSelectedCharacterChatId === contextInfo.currentChatId ? contextInfo.currentChatStorageKey : '');
+            || getSafeCurrentChatStorageKey(
+                contextInfo.characterKey,
+                nextSelectedCharacterChatId,
+                contextInfo.currentChatId,
+                contextInfo.currentChatStorageKey,
+            );
         const nextPages = getPagesForScope(
             nextNotesMode,
             nextCharacterNotesScope,
