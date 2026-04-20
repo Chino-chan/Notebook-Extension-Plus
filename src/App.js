@@ -83,6 +83,12 @@ function getNotebookContextSnapshot() {
     };
 }
 
+function chatNeedsDedicatedStorageKey(chatMetadata) {
+    return _.isPlainObject(chatMetadata)
+        && Boolean(chatMetadata.main_chat)
+        && !chatMetadata[NOTEBOOK_PLUS_CHAT_METADATA_KEY];
+}
+
 function generateChatIntegrityId() {
     if (globalThis.crypto?.randomUUID) {
         return globalThis.crypto.randomUUID();
@@ -576,11 +582,12 @@ function App({ onCloseClicked }) {
             return '';
         }
 
+        const requiresDedicatedStorageKey = chatId === currentChatId && chatNeedsDedicatedStorageKey(currentChatMetadata);
         const cachedStorageKey = getCachedChatStorageKey(characterKey, chatId)
             || characterChats.find((chat) => chat.id === chatId)?.storageKey
             || '';
 
-        if (cachedStorageKey) {
+        if (cachedStorageKey && !requiresDedicatedStorageKey) {
             return { storageKey: cachedStorageKey, sourceKey: '' };
         }
 
@@ -672,6 +679,8 @@ function App({ onCloseClicked }) {
 
     useEffect(() => {
         let cancelled = false;
+        const activeChatMetadata = selectedCharacterChatId === contextInfo.currentChatId ? SillyTavern.getContext().chatMetadata : null;
+        const requiresDedicatedStorageKey = chatNeedsDedicatedStorageKey(activeChatMetadata);
 
         if (
             notesMode !== NOTES_MODE.CHARACTER
@@ -685,14 +694,18 @@ function App({ onCloseClicked }) {
 
         const knownStorageKey = getCachedChatStorageKey(contextInfo.characterKey, selectedCharacterChatId)
             || characterChats.find((chat) => chat.id === selectedCharacterChatId)?.storageKey
-            || (selectedCharacterChatId === contextInfo.currentChatId ? contextInfo.currentChatStorageKey : '');
+            || (
+                selectedCharacterChatId === contextInfo.currentChatId && !requiresDedicatedStorageKey
+                    ? contextInfo.currentChatStorageKey
+                    : ''
+            );
 
         setSelectedCharacterChatStorageKey(knownStorageKey);
 
         async function resolveStorageKey() {
             const { storageKey, sourceKey } = await resolveCharacterChatStorageKey(contextInfo.characterKey, selectedCharacterChatId, {
                 currentChatId: contextInfo.currentChatId,
-                currentChatMetadata: selectedCharacterChatId === contextInfo.currentChatId ? SillyTavern.getContext().chatMetadata : null,
+                currentChatMetadata: activeChatMetadata,
             });
 
             if (cancelled) {
