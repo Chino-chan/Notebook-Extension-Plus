@@ -28,6 +28,7 @@ const LEGACY_NOTEBOOK_PAGES_PATH = 'extensionSettings.notebook.pages';
 const CHARACTER_PAGES_GENERAL_KEY = '__generalPages';
 const CHARACTER_PAGES_CHATS_KEY = '__chatPages';
 const CHARACTER_PAGES_INTEGRITY_KEY = '__chatPagesByIntegrity';
+const CHARACTER_PAGES_STORAGE_KEYS_KEY = '__chatStorageKeysByFilename';
 const NOTEBOOK_PLUS_CHAT_METADATA_KEY = 'notebookPlusChatKey';
 const NOTES_MODE = {
     CHARACTER: 'character',
@@ -202,12 +203,15 @@ async function ensureCharacterChatStorageKey(characterKey, chatId, options = {})
     const {
         currentChatId = '',
         currentChatMetadata = null,
+        existingChatIds = [],
     } = options;
 
     let chatData = [];
     let chatHeader = {};
     let chatMetadata = {};
     const isCurrentChat = chatId === currentChatId && _.isPlainObject(currentChatMetadata);
+    const bucket = getCharacterPagesBucket(characterKey);
+    const storageKeysByFilename = bucket[CHARACTER_PAGES_STORAGE_KEYS_KEY];
 
     if (isCurrentChat) {
         chatMetadata = { ...currentChatMetadata };
@@ -223,6 +227,7 @@ async function ensureCharacterChatStorageKey(characterKey, chatId, options = {})
     }
 
     let didChangeMetadata = false;
+    let didChangeStorageMap = false;
 
     if (!chatMetadata.integrity) {
         chatMetadata.integrity = generateChatIntegrityId();
@@ -230,15 +235,41 @@ async function ensureCharacterChatStorageKey(characterKey, chatId, options = {})
     }
 
     const sourceKey = chatMetadata.integrity;
+    const mappedStorageKey = storageKeysByFilename[chatId] ?? '';
+    const candidateStorageKey = chatMetadata[NOTEBOOK_PLUS_CHAT_METADATA_KEY] || chatMetadata.integrity || '';
+    const conflictingMappedChats = candidateStorageKey
+        ? Object.entries(storageKeysByFilename)
+            .filter(([mappedChatId, mappedKey]) => (
+                mappedChatId !== chatId
+                && mappedKey === candidateStorageKey
+                && existingChatIds.includes(mappedChatId)
+            ))
+            .map(([mappedChatId]) => mappedChatId)
+        : [];
 
-    if (chatMetadata.main_chat && !chatMetadata[NOTEBOOK_PLUS_CHAT_METADATA_KEY]) {
-        chatMetadata[NOTEBOOK_PLUS_CHAT_METADATA_KEY] = generateChatIntegrityId();
+    let storageKey = mappedStorageKey;
+
+    if (!storageKey) {
+        if (candidateStorageKey && conflictingMappedChats.length === 0) {
+            storageKey = candidateStorageKey;
+        } else {
+            storageKey = generateChatIntegrityId();
+            chatMetadata[NOTEBOOK_PLUS_CHAT_METADATA_KEY] = storageKey;
+            didChangeMetadata = true;
+        }
+
+        storageKeysByFilename[chatId] = storageKey;
+        didChangeStorageMap = true;
+    } else if (chatMetadata.main_chat && chatMetadata[NOTEBOOK_PLUS_CHAT_METADATA_KEY] !== storageKey) {
+        chatMetadata[NOTEBOOK_PLUS_CHAT_METADATA_KEY] = storageKey;
         didChangeMetadata = true;
     }
 
-    const storageKey = chatMetadata[NOTEBOOK_PLUS_CHAT_METADATA_KEY] || chatMetadata.integrity || '';
+    if (didChangeMetadata || didChangeStorageMap) {
+        if (didChangeStorageMap) {
+            saveCharacterPagesBucket(characterKey, bucket);
+        }
 
-    if (didChangeMetadata) {
         if (isCurrentChat) {
             const context = SillyTavern.getContext();
             context.updateChatMetadata(chatMetadata, true);
@@ -258,6 +289,7 @@ function normalizeCharacterPagesBucket(bucket) {
             [CHARACTER_PAGES_GENERAL_KEY]: [],
             [CHARACTER_PAGES_CHATS_KEY]: {},
             [CHARACTER_PAGES_INTEGRITY_KEY]: {},
+            [CHARACTER_PAGES_STORAGE_KEYS_KEY]: {},
         };
     }
 
@@ -265,6 +297,7 @@ function normalizeCharacterPagesBucket(bucket) {
         Array.isArray(bucket[CHARACTER_PAGES_GENERAL_KEY])
         || _.isPlainObject(bucket[CHARACTER_PAGES_CHATS_KEY])
         || _.isPlainObject(bucket[CHARACTER_PAGES_INTEGRITY_KEY])
+        || _.isPlainObject(bucket[CHARACTER_PAGES_STORAGE_KEYS_KEY])
     ) {
         const chatPages = _.isPlainObject(bucket[CHARACTER_PAGES_CHATS_KEY])
             ? Object.entries(bucket[CHARACTER_PAGES_CHATS_KEY]).reduce((pagesByChat, [chatId, pages]) => {
@@ -284,11 +317,21 @@ function normalizeCharacterPagesBucket(bucket) {
                 return pagesByIntegrity;
             }, {})
             : {};
+        const storageKeysByFilename = _.isPlainObject(bucket[CHARACTER_PAGES_STORAGE_KEYS_KEY])
+            ? Object.entries(bucket[CHARACTER_PAGES_STORAGE_KEYS_KEY]).reduce((resolvedMap, [chatId, storageKey]) => {
+                if (typeof storageKey === 'string' && storageKey) {
+                    resolvedMap[chatId] = storageKey;
+                }
+
+                return resolvedMap;
+            }, {})
+            : {};
 
         return {
             [CHARACTER_PAGES_GENERAL_KEY]: Array.isArray(bucket[CHARACTER_PAGES_GENERAL_KEY]) ? bucket[CHARACTER_PAGES_GENERAL_KEY] : [],
             [CHARACTER_PAGES_CHATS_KEY]: chatPages,
             [CHARACTER_PAGES_INTEGRITY_KEY]: integrityPages,
+            [CHARACTER_PAGES_STORAGE_KEYS_KEY]: storageKeysByFilename,
         };
     }
 
@@ -304,7 +347,27 @@ function normalizeCharacterPagesBucket(bucket) {
         [CHARACTER_PAGES_GENERAL_KEY]: [],
         [CHARACTER_PAGES_CHATS_KEY]: legacyChatPages,
         [CHARACTER_PAGES_INTEGRITY_KEY]: {},
+        [CHARACTER_PAGES_STORAGE_KEYS_KEY]: {},
     };
+}
+
+function getCharacterPagesBucket(characterKey) {
+    if (!characterKey) {
+        return normalizeCharacterPagesBucket({});
+    }
+
+    const context = SillyTavern.getContext();
+    return normalizeCharacterPagesBucket(_.get(context, [...NOTEBOOK_PLUS_CHARACTER_PAGES_PATH, characterKey]));
+}
+
+function saveCharacterPagesBucket(characterKey, bucket) {
+    if (!characterKey) {
+        return;
+    }
+
+    const context = SillyTavern.getContext();
+    _.set(context, [...NOTEBOOK_PLUS_CHARACTER_PAGES_PATH, characterKey], bucket);
+    context.saveSettingsDebounced();
 }
 
 function getCharacterDropdownPlaceholder(notesMode, characterNotesScope, characterName) {
@@ -511,6 +574,10 @@ class StateManager {
                 ...previousPages[CHARACTER_PAGES_INTEGRITY_KEY],
                 ...currentPages[CHARACTER_PAGES_INTEGRITY_KEY],
             },
+            [CHARACTER_PAGES_STORAGE_KEYS_KEY]: {
+                ...previousPages[CHARACTER_PAGES_STORAGE_KEYS_KEY],
+                ...currentPages[CHARACTER_PAGES_STORAGE_KEYS_KEY],
+            },
         };
 
         _.set(context, [...NOTEBOOK_PLUS_CHARACTER_PAGES_PATH, newCharacterKey], mergedPages);
@@ -582,9 +649,10 @@ function App({ onCloseClicked }) {
             return '';
         }
 
+        const persistedStorageKeys = getCharacterPagesBucket(characterKey)[CHARACTER_PAGES_STORAGE_KEYS_KEY];
         const requiresDedicatedStorageKey = chatId === currentChatId && chatNeedsDedicatedStorageKey(currentChatMetadata);
         const cachedStorageKey = getCachedChatStorageKey(characterKey, chatId)
-            || characterChats.find((chat) => chat.id === chatId)?.storageKey
+            || persistedStorageKeys[chatId]
             || '';
 
         if (cachedStorageKey && !requiresDedicatedStorageKey) {
@@ -594,6 +662,7 @@ function App({ onCloseClicked }) {
         const result = await ensureCharacterChatStorageKey(characterKey, chatId, {
             currentChatId,
             currentChatMetadata,
+            existingChatIds: characterChats.map((chat) => chat.id),
         });
 
         if (result.storageKey) {
@@ -623,12 +692,17 @@ function App({ onCloseClicked }) {
             }
 
             const chats = await fetchCharacterChats(snapshot.characterKey, snapshot.currentChatId, snapshot.currentChatStorageKey);
+            const storedStorageKeys = getCharacterPagesBucket(snapshot.characterKey)[CHARACTER_PAGES_STORAGE_KEYS_KEY];
+            const resolvedChats = chats.map((chat) => ({
+                ...chat,
+                storageKey: storedStorageKeys[chat.id] || '',
+            }));
 
             if (requestId !== refreshRequestRef.current) {
                 return;
             }
 
-            setCharacterChats(chats);
+            setCharacterChats(resolvedChats);
 
             if (snapshot.currentChatId && snapshot.currentChatStorageKey) {
                 setCachedChatStorageKey(snapshot.characterKey, snapshot.currentChatId, snapshot.currentChatStorageKey);
@@ -636,10 +710,10 @@ function App({ onCloseClicked }) {
 
             const shouldKeepSelectedChat = preserveSelectedChat && previousContextInfo.characterKey === snapshot.characterKey;
             const preferredChatId = shouldKeepSelectedChat ? selectedCharacterChatIdRef.current : snapshot.currentChatId;
-            const nextSelectedChatId = chats.some((chat) => chat.id === preferredChatId)
+            const nextSelectedChatId = resolvedChats.some((chat) => chat.id === preferredChatId)
                 ? preferredChatId
-                : chats[0]?.id ?? '';
-            const nextSelectedChatStorageKey = chats.find((chat) => chat.id === nextSelectedChatId)?.storageKey
+                : resolvedChats[0]?.id ?? '';
+            const nextSelectedChatStorageKey = resolvedChats.find((chat) => chat.id === nextSelectedChatId)?.storageKey
                 ?? (nextSelectedChatId === snapshot.currentChatId ? snapshot.currentChatStorageKey : '');
 
             setSelectedCharacterChatId(nextSelectedChatId);
@@ -692,8 +766,9 @@ function App({ onCloseClicked }) {
             return undefined;
         }
 
+        const persistedStorageKeys = getCharacterPagesBucket(contextInfo.characterKey)[CHARACTER_PAGES_STORAGE_KEYS_KEY];
         const knownStorageKey = getCachedChatStorageKey(contextInfo.characterKey, selectedCharacterChatId)
-            || characterChats.find((chat) => chat.id === selectedCharacterChatId)?.storageKey
+            || persistedStorageKeys[selectedCharacterChatId]
             || (
                 selectedCharacterChatId === contextInfo.currentChatId && !requiresDedicatedStorageKey
                     ? contextInfo.currentChatStorageKey
@@ -765,8 +840,9 @@ function App({ onCloseClicked }) {
     }
 
     function switchToScope(nextNotesMode, nextCharacterNotesScope = characterNotesScope, nextSelectedCharacterChatId = selectedCharacterChatId) {
+        const persistedStorageKeys = getCharacterPagesBucket(contextInfo.characterKey)[CHARACTER_PAGES_STORAGE_KEYS_KEY];
         const nextSelectedCharacterChatStorageKey = getCachedChatStorageKey(contextInfo.characterKey, nextSelectedCharacterChatId)
-            || characterChats.find((chat) => chat.id === nextSelectedCharacterChatId)?.storageKey
+            || persistedStorageKeys[nextSelectedCharacterChatId]
             || (nextSelectedCharacterChatId === contextInfo.currentChatId ? contextInfo.currentChatStorageKey : '');
         const nextPages = getPagesForScope(
             nextNotesMode,
