@@ -77,6 +77,7 @@ function getNotebookContextSnapshot() {
         characterName: character?.name ?? '',
         currentChatId: isSingleCharacterChat ? context.chatId ?? '' : '',
         currentChatStorageKey: isSingleCharacterChat ? context.chatMetadata?.[NOTEBOOK_PLUS_CHAT_METADATA_KEY] ?? '' : '',
+        currentChatMainChat: isSingleCharacterChat ? context.chatMetadata?.main_chat ?? '' : '',
         selectedChatStorageKey: '',
     };
 }
@@ -87,6 +88,14 @@ function isDerivedChatFilename(chatId) {
     }
 
     return / - Branch #\d+$/i.test(chatId) || / - Checkpoint #\d+$/i.test(chatId);
+}
+
+function isDerivedChatMetadata(chatId, chatMetadata) {
+    if (!chatId || !_.isPlainObject(chatMetadata) || typeof chatMetadata.main_chat !== 'string' || !chatMetadata.main_chat) {
+        return false;
+    }
+
+    return chatMetadata.main_chat !== chatId;
 }
 
 function generateChatIntegrityId() {
@@ -243,7 +252,8 @@ async function ensureCharacterChatStorageKey(characterKey, chatId, options = {})
     let didChangeMetadata = false;
     let didChangeBucket = false;
     const bucket = getCharacterPagesBucket(characterKey);
-    const normalizedStorageKeysByFilename = normalizeChatStorageKeysMap(bucket[CHARACTER_PAGES_STORAGE_KEYS_KEY], [...activeChatIds, chatId]);
+    const rawStorageKeysByFilename = _.isPlainObject(bucket[CHARACTER_PAGES_STORAGE_KEYS_KEY]) ? bucket[CHARACTER_PAGES_STORAGE_KEYS_KEY] : {};
+    const normalizedStorageKeysByFilename = normalizeChatStorageKeysMap(rawStorageKeysByFilename, [...activeChatIds, chatId]);
 
     if (!_.isEqual(normalizedStorageKeysByFilename, bucket[CHARACTER_PAGES_STORAGE_KEYS_KEY])) {
         bucket[CHARACTER_PAGES_STORAGE_KEYS_KEY] = normalizedStorageKeysByFilename;
@@ -260,12 +270,25 @@ async function ensureCharacterChatStorageKey(characterKey, chatId, options = {})
         : '';
     const sourceKey = inheritedStorageKey || chatMetadata.integrity;
     let storageKey = normalizedStorageKeysByFilename[chatId] ?? '';
+    const existingStorageKeyOwners = Object.entries(rawStorageKeysByFilename).filter(([mappedChatId, mappedStorageKey]) => (
+        mappedChatId !== chatId
+        && mappedStorageKey
+        && mappedStorageKey === inheritedStorageKey
+    ));
+    const activeStorageKeyOwner = existingStorageKeyOwners.find(([mappedChatId]) => activeChatIds.includes(mappedChatId));
+    const staleStorageKeyOwner = existingStorageKeyOwners.find(([mappedChatId]) => !activeChatIds.includes(mappedChatId));
+    const derivedChat = isDerivedChatFilename(chatId) || isDerivedChatMetadata(chatId, chatMetadata);
 
     if (!storageKey) {
-        if (isDerivedChatFilename(chatId)) {
-            storageKey = generateChatIntegrityId();
-            chatMetadata[NOTEBOOK_PLUS_CHAT_METADATA_KEY] = storageKey;
-            didChangeMetadata = true;
+        if (derivedChat) {
+            if (inheritedStorageKey && staleStorageKeyOwner && !activeStorageKeyOwner) {
+                storageKey = inheritedStorageKey;
+                delete bucket[CHARACTER_PAGES_STORAGE_KEYS_KEY][staleStorageKeyOwner[0]];
+            } else {
+                storageKey = generateChatIntegrityId();
+                chatMetadata[NOTEBOOK_PLUS_CHAT_METADATA_KEY] = storageKey;
+                didChangeMetadata = true;
+            }
         } else {
             storageKey = inheritedStorageKey || chatMetadata.integrity;
 
@@ -390,14 +413,15 @@ function getPersistedChatStorageKey(characterKey, chatId) {
     return bucket[CHARACTER_PAGES_STORAGE_KEYS_KEY][chatId] ?? '';
 }
 
-function getSafeCurrentChatStorageKey(characterKey, chatId, currentChatId, currentChatStorageKey) {
+function getSafeCurrentChatStorageKey(characterKey, chatId, currentChatId, currentChatStorageKey, currentChatMainChat = '') {
     if (!characterKey || !chatId || chatId !== currentChatId || !currentChatStorageKey) {
         return '';
     }
 
     const persistedStorageKey = getPersistedChatStorageKey(characterKey, chatId);
+    const isDerivedCurrentChat = currentChatMainChat && currentChatMainChat !== chatId;
 
-    if (persistedStorageKey || !isDerivedChatFilename(chatId)) {
+    if (persistedStorageKey || (!isDerivedChatFilename(chatId) && !isDerivedCurrentChat)) {
         return currentChatStorageKey;
     }
 
@@ -736,12 +760,24 @@ function App({ onCloseClicked }) {
                 ...chat,
                 storageKey: getCachedChatStorageKey(snapshot.characterKey, chat.id)
                     || storageKeysByFilename[chat.id]
-                    || getSafeCurrentChatStorageKey(snapshot.characterKey, chat.id, snapshot.currentChatId, snapshot.currentChatStorageKey),
+                    || getSafeCurrentChatStorageKey(
+                        snapshot.characterKey,
+                        chat.id,
+                        snapshot.currentChatId,
+                        snapshot.currentChatStorageKey,
+                        snapshot.currentChatMainChat,
+                    ),
             }));
 
             setCharacterChats(nextChats);
 
-            if (getSafeCurrentChatStorageKey(snapshot.characterKey, snapshot.currentChatId, snapshot.currentChatId, snapshot.currentChatStorageKey)) {
+            if (getSafeCurrentChatStorageKey(
+                snapshot.characterKey,
+                snapshot.currentChatId,
+                snapshot.currentChatId,
+                snapshot.currentChatStorageKey,
+                snapshot.currentChatMainChat,
+            )) {
                 setCachedChatStorageKey(snapshot.characterKey, snapshot.currentChatId, snapshot.currentChatStorageKey);
             }
 
@@ -751,7 +787,13 @@ function App({ onCloseClicked }) {
                 ? preferredChatId
                 : nextChats[0]?.id ?? '';
             const nextSelectedChatStorageKey = nextChats.find((chat) => chat.id === nextSelectedChatId)?.storageKey
-                ?? getSafeCurrentChatStorageKey(snapshot.characterKey, nextSelectedChatId, snapshot.currentChatId, snapshot.currentChatStorageKey);
+                ?? getSafeCurrentChatStorageKey(
+                    snapshot.characterKey,
+                    nextSelectedChatId,
+                    snapshot.currentChatId,
+                    snapshot.currentChatStorageKey,
+                    snapshot.currentChatMainChat,
+                );
 
             setSelectedCharacterChatId(nextSelectedChatId);
             setSelectedCharacterChatStorageKey(nextSelectedChatStorageKey);
@@ -810,6 +852,7 @@ function App({ onCloseClicked }) {
                 selectedCharacterChatId,
                 contextInfo.currentChatId,
                 contextInfo.currentChatStorageKey,
+                contextInfo.currentChatMainChat,
             );
 
         setSelectedCharacterChatStorageKey(knownStorageKey);
@@ -886,6 +929,7 @@ function App({ onCloseClicked }) {
                 nextSelectedCharacterChatId,
                 contextInfo.currentChatId,
                 contextInfo.currentChatStorageKey,
+                contextInfo.currentChatMainChat,
             );
         const nextPages = getPagesForScope(
             nextNotesMode,
