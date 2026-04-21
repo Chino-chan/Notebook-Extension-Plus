@@ -6,10 +6,10 @@ https://github.com/SillyTavern/Extension-Notebook
 ## What was added
 
 1. Now notes are divided either per "Character Notes" or "Global".
-     - Inside "Character Notes" you can choose to store notes either for the card itself as well as notes associated with specific chats within the card.
-     - You can safely rename the chatfiles and the notes will still be associated with them.
+     - Inside "Character Notes" you can to store notes for the card itself as well as for specific chats within the card.
      - Branches and Checkpoints have their own notes.
-   
+     - You can safely rename the chatfiles and the notes will still be associated with them.
+     
 3. Added text-color tools and a copy-to-clipboard tool for mobile users
 
 
